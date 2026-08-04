@@ -13,13 +13,11 @@ The gate verifies that an attestation is PRESENT and WELL-FORMED. It cannot veri
 happened. What it buys is attribution, not enforcement. A false attestation passes, but it is then a
 claim on the record with a name on it.
 
-Form is deterministic so the machine owns it; truth is judgment so a reviewer owns it.
-
 ## The trailer
 
 ```
 Reviewed-standards: reviewer=claude-opus-5 major=0 moderate=0 minor=3
-Reviewed-annotations: reviewer=claude-opus-5 major=0 moderate=0 minor=1 file=src/gate.rs
+Reviewed-annotations: reviewer=claude-opus-5 major=0 moderate=0 minor=1 file=src/trailer.rs
 ```
 
 Named fields, so a per-file gate adds one instead of changing the arity. `file=` is terminal, so a
@@ -27,8 +25,9 @@ path may contain spaces. Trailers must be the message's last paragraph. That is 
 `git interpret-trailers --parse` reads, and a trailer written above the body is invisible to it.
 The tool detects that case by name rather than reporting the trailer as missing.
 
-The counts are kept even though the tool could derive them. They are a hallucination detector, which
-matters precisely because the writer is an LLM.
+The counts are the whole verdict, and asking for three numbers rather than a verdict is deliberate.
+A reviewer that reports `major=0` has committed to a number it can be held to, which matters
+precisely because the writer is an LLM.
 
 ## The ladder
 
@@ -49,7 +48,7 @@ A review-and-fix loop fails in two directions, and the band between them is narr
 nothing ever settles: every nit blocks, so no round converges. Too loose and nothing is caught: the
 reviewer rubber-stamps.
 
-MINOR is what makes zero-zero reachable. A finding can be recorded without restarting the review,
+**MINOR is what makes zero-zero reachable.** A finding can be recorded without restarting the review,
 so nothing is suppressed and no reviewer is asked to pretend the code is clean. Findings are
 declassified, never hidden, which keeps the pressure on the code rather than on the report. The
 loop ends when the reviewer has seen everything that matters, not when it runs out of things to
@@ -58,9 +57,7 @@ say.
 **The brief carries one thing: intent.** What the change set out to do, stated flatly, as a spec
 would state it: no reason it is worth doing, no defence of the approach, no account of what it
 replaces. A reviewer handed a case for the change grades the case, and that is most of what stands
-between a review and a rubber stamp. A stricter regime exists, escrowing the intent before the work
-starts. Writing it at review time has held up well enough that the extra ceremony has not earned
-its place.
+between a review and a rubber stamp.
 
 **Scope is not a reviewer's question.** It was settled before a plan existed, and the reviewer sees
 neither the issue nor the case for the change. A scope observation comes back as one MINOR line,
@@ -88,8 +85,8 @@ token meant for its neighbour, which would otherwise leave a gate silently skipp
 matching it means the gate is skipped, and the tool says so: a mis-scoped pathspec otherwise looks
 identical to a passing commit. A literal `--path` naming nothing git tracks is a typo, and fails.
 
-`--per-file` demands one trailer per staged file, with the list taken from git, never from the
-author. An author-supplied list decides what gets looked at, and that is where a missed file hides.
+`--per-file` demands one trailer per staged file, deletions excluded, with the list taken from git
+rather than from the author. An author-supplied list decides what gets looked at, and that is where a missed file hides.
 It is the one check the author cannot fake by scoping.
 
 Auto-generated messages (`Merge`, `Revert`, `fixup!`, `squash!`) carry no review and pass. `Merge`
@@ -97,7 +94,7 @@ and `Revert` are trusted only when git's own in-progress state confirms them.
 
 Exit status: 0 pass or skip, 1 gate failed, 2 usage or git error.
 
-## The hook it produces
+## Wiring it into a repo
 
 ```bash
 #!/usr/bin/env bash
@@ -110,8 +107,8 @@ git agent-verdict "$1" prose       --doc docs/communication-style.md --path READ
 Line order is review order. `set -e` stops at the first unattested gate on purpose: a later gate
 must never be judged against content an earlier one is still changing.
 
-On failure the tool prints the missing trailer first, then the reviewer prompt that earns it, so an
-agent has the target and the remedy in one turn. The prompt is embedded in the binary, which is what
+When a trailer is missing the tool prints it first, then the reviewer prompt that earns it, so an
+agent has the target and the remedy in one turn. The other failures name what is wrong and stop. The prompt is embedded in the binary, which is what
 stops it becoming a per-repo file that drifts.
 
 ## Circular-rubric guard
@@ -119,9 +116,8 @@ stops it becoming a per-repo file that drifts.
 A commit that stages one of its own `--doc` files is refused, and told to land alone via
 `--no-verify`. Judging a change to the measure against that same measure is circular.
 
-This is the one place the tool refuses rather than verifies, and it is in here rather than in the
-hook for a single reason: the list of rubrics IS the list of `--doc` paths. Written in bash it would
-be a second copy of them, free to drift from the first. Docs outside the worktree can never be
+This is the one place the tool refuses rather than verifies. It lives here because the list of
+rubrics IS the list of `--doc` paths, and a copy in bash would be free to drift from it. Docs outside the worktree can never be
 staged, so the check is a no-op for them.
 
 ## Developing this repo
