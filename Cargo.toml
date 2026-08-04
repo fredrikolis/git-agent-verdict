@@ -1,0 +1,19 @@
+# Concern: the crate manifest — one binary, no dependencies | Non-concern: how the binary is shipped (the release pipeline owns that) | IO: none
+
+[package]
+name = "git-agent-verdict"
+version = "0.1.0"
+edition = "2021"
+description = "Verify that a commit message carries an attested review verdict"
+license = "MIT"
+repository = "https://github.com/fredrikolis/git-agent-verdict"
+readme = "README.md"
+keywords = ["git", "git-hook", "code-review", "commit-msg", "agents"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "git-agent-verdict"
+path = "src/main.rs"
+
+[profile.release]
+strip = true

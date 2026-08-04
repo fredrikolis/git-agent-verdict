@@ -1,0 +1,70 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      # The end-to-end tests build throwaway repos, so git must have an identity
+      # and a deterministic default branch on a bare runner.
+      - name: Configure git for the e2e temp repos
+        run: |
+          git config --global user.email ci@example.com
+          git config --global user.name ci
+          git config --global init.defaultBranch main
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --all
+
+  # The same two linters .githooks/pre-commit runs, at the same pinned versions.
+  # A version bump belongs in one commit that also clears whatever the new one finds.
+  gates:
+    runs-on: ubuntu-latest
+    env:
+      ANNOTATED_TREE_VERSION: 0.6.0
+      LINT_EXTRA_REV: 7a232179e45414108d28047acd6315d9a2c4946b
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Annotation gate
+        run: npx --yes "annotated-tree@${ANNOTATED_TREE_VERSION}" --strict-check --include-tests .
+      - name: Comment budget
+        run: |
+          set -eux
+          cargo install --git https://github.com/fredrikolis/cargo-lint-extra \
+            --rev "$LINT_EXTRA_REV" --locked cargo-lint-extra
+          cargo lint-extra --config .cargo-lint-extra.toml .
+
+  # Freeze the git-subcommand contract: the binary must be reachable as
+  # `git agent-verdict`, which is how every hook in the README invokes it.
+  git-subcommand:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install and resolve as a git subcommand
+        run: |
+          set -eux
+          cargo install --path . --locked
+          git agent-verdict 2>&1 | grep -q 'usage: git-agent-verdict'

@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Concern: the mechanical gates — a flat list of commands, each blocking on its own exit status | Non-concern: the review attestation, which this repo does not self-gate | IO: (staged tree) -> exit status
+# There is deliberately no commit-msg gate here: gating this tool with this tool is circular, and
+# the reviews it demands are run against the knowledge-base standards by hand instead.
+# Enable per clone: git config core.hooksPath .githooks
+# Both linters are version-pinned at install time (see README), not here: a wrapper script to hold
+# the pin would be a second file for one caller.
+set -euo pipefail
+
+cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+case ":$PATH:" in *":$cargo_bin:"*) ;; *) PATH="$cargo_bin:$PATH" ;; esac
+export PATH
+
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --quiet
+annotated-tree --strict-check --include-tests .
+cargo lint-extra --config .cargo-lint-extra.toml .

@@ -1,0 +1,6 @@
+# Concern: the architectural invariants the annotation gate enforces here | Non-concern: the annotation format itself (annotated-tree owns it) or when the gate runs (.githooks/pre-commit) | IO: none
+
+[rules]
+require_package_charter = true
+forbid_cycles = true
+forbid_orphans = false

@@ -1,0 +1,49 @@
+# Concern: which cargo-lint-extra rules run, and at what level | Non-concern: which comments earn their space (the knowledge-base standard) | IO: none
+
+[global]
+exclude = ["target"]
+
+# 210, not 120: annotated-tree bounds a first-line annotation at 200 excluding its comment marker,
+# and that line cannot wrap. A lower limit here would make the two gates contradict each other.
+[rules.line-length]
+level = "deny"
+soft_limit = 210
+hard_limit = 210
+url_exception = true
+
+# A file here that reaches 400 lines has taken on a second concern.
+[rules.file-length]
+level = "deny"
+soft_limit = 400
+hard_limit = 400
+
+[rules.inline-comments]
+level = "deny"
+max_ratio = 0.20
+max_consecutive = 1
+
+[rules.file-comments]
+level = "deny"
+max_ratio = 0.30
+count_doc_comments = true
+max_consecutive = 1
+max_doc_consecutive = 4
+
+# Off deliberately, not by omission: performance and style opinions this repo has not adopted.
+[rules.string-alloc-in-loop]
+level = "allow"
+
+[rules.clone-density]
+level = "allow"
+
+[rules.verbose-result-handling]
+level = "allow"
+
+[rules.redundant-comments]
+level = "allow"
+
+[rules.glob-imports]
+level = "warn"
+
+[rules.todo-comments]
+level = "warn"
