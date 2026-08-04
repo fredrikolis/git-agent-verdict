@@ -63,15 +63,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      # Skip a version already on crates.io rather than failing. A version can be
-      # published by hand before its tag exists, and re-running a half-failed
+      # Tolerate a version already on crates.io rather than failing. A version can
+      # be published by hand before its tag exists, and re-running a half-failed
       # release must not red on the one step that already succeeded.
+      # Decided from cargo's own error, not from a crates.io API pre-check: that
+      # API rejects a default curl User-Agent, so the check failed closed and ran
+      # the publish it was meant to skip.
       - name: Publish unless this version is already on crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           set -eu
-          version="${GITHUB_REF_NAME#v}"
-          if curl -fsS "https://crates.io/api/v1/crates/git-agent-verdict/${version}" >/dev/null 2>&1; then
-            echo "git-agent-verdict ${version} is already published; nothing to do."
+          if cargo publish 2>publish.err; then
             exit 0
           fi
-          cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          cat publish.err >&2
+          grep -qE 'already (exists|been uploaded|uploaded)' publish.err
+          echo "Version already on crates.io; nothing to do."
