@@ -76,10 +76,14 @@ this one, both of which never settled:
 
 ```
 git-agent-verdict <msg-file> <gate> [--per-file] --doc <path>... --path <pathspec>...
+git-agent-verdict --rubric-guard --doc <path>...
 ```
 
 Installs as `git agent-verdict`. Every list is a repeated singular flag. No variadic can absorb the
 token meant for its neighbour, which would otherwise leave a gate silently skipped.
+
+The second form is the rubric preflight, described below. It reads the index alone, so it takes
+neither a message file nor a gate.
 
 `--path` goes straight to `git diff --cached`, so git's pathspec syntax comes free. No staged file
 matching it means the gate is skipped, and the tool says so: a mis-scoped pathspec otherwise looks
@@ -99,6 +103,8 @@ Exit status: 0 pass or skip, 1 gate failed, 2 usage or git error.
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
+git agent-verdict --rubric-guard \
+  --doc docs/repo-standards.md --doc docs/annotation-guide.md --doc docs/communication-style.md
 git agent-verdict "$1" standards   --doc docs/repo-standards.md --path .
 git agent-verdict "$1" annotations --per-file --doc docs/annotation-guide.md --path .
 git agent-verdict "$1" prose       --doc docs/communication-style.md --path README.md
@@ -132,11 +138,30 @@ This is the one place the tool refuses rather than verifies. It lives here becau
 rubrics IS the list of `--doc` paths, and a copy in bash would be free to drift from it. Docs
 outside the worktree can never be staged, so the check is a no-op for them.
 
-**Known limitation.** An invocation sees only its own `--doc` paths, so it cannot refuse on behalf
-of a gate further down the hook. Staging a later gate's rubric costs one full review of an earlier
-gate before the refusal arrives. Sharing the list across gates would mean declaring it twice, which
-is the drift this design exists to prevent, so the workaround is the rule the guard already states:
-land a rubric change on its own, first.
+## The rubric preflight
+
+A gate sees only its own `--doc` paths, so on its own it cannot refuse on behalf of a gate further
+down the hook. Staging a later gate's rubric would cost one full review of an earlier gate before
+the refusal arrives, and that wasted review is what `--rubric-guard` removes:
+
+```
+git agent-verdict --rubric-guard --doc <path>...
+```
+
+It holds every gate's rubrics at once and runs first in the hook, so the refusal arrives before any
+review is asked for. It reads the index and nothing else: no message file, no gate, no `--path`.
+Staged rubrics are named and the commit is refused with exit 1; otherwise it exits 0 in silence.
+
+**It is an optimisation, not the check.** The per-gate guard stays, and stays the correctness
+backstop, so a rubric this list has drifted away from costs an early exit and never a missed rubric.
+That is what makes stating the paths a second time safe here, where sharing a list between gates
+would not be.
+
+`--rubric-guard` with no `--doc` is a usage error (exit 2), as it is for a gate: a preflight
+guarding nothing is a hook that has silently stopped guarding. So is a `<msg-file>`, `<gate>`,
+`--path` or `--per-file` given alongside it, since the mode has no use for any of them. A `--doc`
+that does not resolve on disk is a usage error in both modes, because a rubric that exempted itself
+by being mistyped is the drift the guard exists to prevent.
 
 ## Developing this repo
 

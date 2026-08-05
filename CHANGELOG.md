@@ -5,6 +5,22 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/).
 
+## [0.1.4] - 2026-08-05
+
+### Added
+- `git-agent-verdict --rubric-guard --doc <path>...`, a preflight that reads the index alone and
+  refuses the commit when any named rubric is staged, naming which and asking for `--no-verify`.
+  Run first in a hook it holds every gate's rubrics at once, so staging a later gate's rubric no
+  longer costs a full review of an earlier gate before the refusal arrives. Flag-only, because the
+  mode needs neither the message nor a gate: a `<msg-file>`, `<gate>`, `--path` or `--per-file`
+  beside it exits 2, as does `--rubric-guard` with no `--doc` — a preflight guarding nothing is a
+  hook that has silently stopped guarding.
+
+### Documented
+- The per-gate guard stays, and stays the correctness backstop. The preflight only fails faster, so
+  a rubric its list has drifted away from costs an early exit and never a missed rubric. That is
+  what makes stating the paths a second time safe here, where sharing a list between gates is not.
+
 ## [0.1.3] - 2026-08-05
 
 ### Added
@@ -51,6 +67,7 @@ to [Semantic Versioning](https://semver.org/).
 - An exemption for the subjects git writes itself. `Merge` and `Revert` are honoured only when
   `MERGE_HEAD` or `REVERT_HEAD` confirms them, so a hand-typed subject cannot forge it.
 
+[0.1.4]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.1.4
 [0.1.3]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.1.3
 [0.1.2]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.1.2
 [0.1.1]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.1.1

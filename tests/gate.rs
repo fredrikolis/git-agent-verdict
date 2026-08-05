@@ -60,11 +60,30 @@ impl Repo {
     fn standards(&self, msg: &str) -> (i32, String) {
         self.run(msg, &["standards", "--doc", "rubric.md", "--path", "."])
     }
+
+    // The preflight takes no message file, so it cannot go through run().
+    fn guard(&self, args: &[&str]) -> (i32, String) {
+        let out = Command::new(BIN)
+            .current_dir(&self.dir)
+            .args(args)
+            .output()
+            .expect("binary runs");
+        let text = String::from_utf8_lossy(&out.stderr).into_owned();
+        (out.status.code().expect("exited"), text)
+    }
+
+    // Written beside the worktree, not in it: such a path can never appear in the index.
+    fn outside_doc(&self) -> PathBuf {
+        let path = self.dir.with_extension("outside.md");
+        std::fs::write(&path, "the standard").expect("write");
+        path
+    }
 }
 
 impl Drop for Repo {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.dir);
+        let _ = std::fs::remove_file(self.dir.with_extension("outside.md"));
     }
 }
 
@@ -139,6 +158,62 @@ fn staging_a_rubric_refuses_the_commit() {
     let (code, out) = repo.standards(CLEAN);
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("RUBRIC IS STAGED"), "{out}");
+}
+
+#[test]
+fn the_preflight_refuses_a_staged_rubric_and_names_it() {
+    let repo = Repo::new();
+    repo.write("later-rubric.md", "the other standard");
+    repo.stage(&["src.rs", "later-rubric.md"]);
+    let args = [
+        "--rubric-guard",
+        "--doc",
+        "rubric.md",
+        "--doc",
+        "later-rubric.md",
+    ];
+    let (code, out) = repo.guard(&args);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("RUBRIC IS STAGED"), "{out}");
+    assert!(out.contains("later-rubric.md"), "{out}");
+    assert!(!out.contains("\n  rubric.md"), "{out}");
+    assert!(out.contains("--no-verify"), "{out}");
+}
+
+#[test]
+fn the_preflight_passes_silently_when_no_rubric_is_staged() {
+    let repo = Repo::new();
+    repo.stage(&["src.rs"]);
+    let (code, out) = repo.guard(&["--rubric-guard", "--doc", "rubric.md"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.is_empty(), "{out}");
+}
+
+#[test]
+fn the_preflight_is_a_no_op_for_a_doc_outside_the_worktree() {
+    let repo = Repo::new();
+    repo.stage(&["src.rs", "rubric.md"]);
+    let outside = repo.outside_doc();
+    let (code, out) = repo.guard(&["--rubric-guard", "--doc", outside.to_str().expect("utf-8")]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.is_empty(), "{out}");
+}
+
+#[test]
+fn the_preflight_rejects_arguments_its_mode_cannot_use() {
+    let repo = Repo::new();
+    repo.stage(&["src.rs", "rubric.md"]);
+    let bad: [&[&str]; 4] = [
+        &["--rubric-guard"],
+        &["--rubric-guard", "--doc", "rubric.md", "--path", "."],
+        &["--rubric-guard", "--doc", "rubric.md", "--per-file"],
+        &["--rubric-guard", "MSG", "standards", "--doc", "rubric.md"],
+    ];
+    for args in bad {
+        let (code, out) = repo.guard(args);
+        assert_eq!(code, 2, "{args:?}: {out}");
+        assert!(out.contains("usage:"), "{args:?}: {out}");
+    }
 }
 
 #[test]

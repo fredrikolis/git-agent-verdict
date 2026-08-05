@@ -1,4 +1,4 @@
-// Concern: the invocation grammar and the pass/fail decision for one gate | Non-concern: the trailer grammar, or the wording of a rejection | IO: (argv, message file) -> exit status
+// Concern: the invocation grammar, and the decision for one gate or for the rubric preflight | Non-concern: the trailer grammar, or the wording of a rejection | IO: (argv, message file) -> exit status
 
 mod git;
 mod report;
@@ -6,8 +6,12 @@ mod trailer;
 
 use std::process::ExitCode;
 
-const USAGE: &str =
-    "usage: git-agent-verdict <msg-file> <gate> [--per-file] --doc <path>... --path <pathspec>...";
+const USAGE: &str = concat!(
+    "usage: git-agent-verdict <msg-file> <gate> [--per-file] --doc <path>... --path <pathspec>...\n",
+    "       git-agent-verdict --rubric-guard --doc <path>..."
+);
+
+const GUARD_LABEL: &str = "rubric-guard";
 
 pub struct Invocation {
     pub msg_file: String,
@@ -17,13 +21,32 @@ pub struct Invocation {
     pub paths: Vec<String>,
 }
 
+// The preflight needs neither the message nor a gate, so it is a flag-only mode rather than a gate that ignores half its arguments.
+enum Mode {
+    Gate(Invocation),
+    RubricGuard(Vec<String>),
+}
+
+// Resolved once, here: the reviewer block promises absolute paths, and an unresolvable doc would silently exempt itself from the rubric guards.
+fn canonical_docs(docs: Vec<String>) -> Result<Vec<String>, String> {
+    docs.into_iter()
+        .map(|d| {
+            std::fs::canonicalize(&d)
+                .map(|p| p.to_string_lossy().into_owned())
+                .map_err(|e| format!("--doc {d}: {e}"))
+        })
+        .collect()
+}
+
 // Every list is a repeated singular flag: no variadic can absorb the token meant for its neighbour.
-fn parse(args: impl Iterator<Item = String>) -> Result<Invocation, String> {
+fn parse(args: impl Iterator<Item = String>) -> Result<Mode, String> {
     let mut positional = Vec::new();
-    let (mut per_file, mut docs, mut paths) = (false, Vec::new(), Vec::new());
+    let (mut guard, mut per_file) = (false, false);
+    let (mut docs, mut paths) = (Vec::new(), Vec::new());
     let mut args = args;
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--rubric-guard" => guard = true,
             "--per-file" => per_file = true,
             "--doc" => docs.push(args.next().ok_or("--doc needs a path")?),
             "--path" => paths.push(args.next().ok_or("--path needs a pathspec")?),
@@ -31,31 +54,34 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Invocation, String> {
             value => positional.push(value.to_string()),
         }
     }
+    // A preflight guarding nothing is a hook that has silently stopped guarding, so an empty list is an error in both modes rather than a vacuous pass.
+    if docs.is_empty() {
+        return Err("at least one --doc is required".to_string());
+    }
+    if guard {
+        if per_file || !paths.is_empty() || !positional.is_empty() {
+            let detail =
+                "--rubric-guard reads the index alone: no <msg-file>, <gate>, --path or --per-file";
+            return Err(detail.to_string());
+        }
+        return Ok(Mode::RubricGuard(canonical_docs(docs)?));
+    }
     let [msg_file, gate] = <[String; 2]>::try_from(positional).map_err(|got| {
         format!(
             "expected <msg-file> and <gate>, got {} argument(s)",
             got.len()
         )
     })?;
-    if docs.is_empty() || paths.is_empty() {
-        return Err("at least one --doc and one --path are required".to_string());
+    if paths.is_empty() {
+        return Err("at least one --path is required".to_string());
     }
-    // Resolved once, here: the reviewer block promises absolute paths, and an unresolvable doc would silently exempt itself from the circular-rubric guard.
-    let docs = docs
-        .into_iter()
-        .map(|d| {
-            std::fs::canonicalize(&d)
-                .map(|p| p.to_string_lossy().into_owned())
-                .map_err(|e| format!("--doc {d}: {e}"))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(Invocation {
+    Ok(Mode::Gate(Invocation {
         msg_file,
         gate,
         per_file,
-        docs,
+        docs: canonical_docs(docs)?,
         paths,
-    })
+    }))
 }
 
 fn per_file_gaps(inv: &Invocation, verdicts: &[trailer::Verdict]) -> Result<Vec<String>, String> {
@@ -80,9 +106,8 @@ fn auto_generated(raw: &str) -> bool {
 }
 
 // The inverse verb: fire BECAUSE a yardstick is staged, and always refuse — judging a change to the measure against that same measure is circular.
-fn staged_rubrics(inv: &Invocation) -> Result<Vec<String>, String> {
-    let in_repo: Vec<String> = inv
-        .docs
+fn staged_rubrics(docs: &[String]) -> Result<Vec<String>, String> {
+    let in_repo: Vec<String> = docs
         .iter()
         .filter_map(|d| git::relative_to_root(d))
         .collect();
@@ -108,8 +133,18 @@ fn drop_agent_coauthor(msg_file: &str, raw: &str) -> Result<String, String> {
     Ok(text)
 }
 
+// Runs before any gate, so a rubric belonging to a LATER gate is caught without first paying for an earlier gate's review. The per-gate guard stays the backstop, so drift here only costs an early exit.
+fn rubric_guard(docs: &[String]) -> Result<bool, String> {
+    let rubrics = staged_rubrics(docs)?;
+    if rubrics.is_empty() {
+        return Ok(true);
+    }
+    report::preflight(&rubrics);
+    Ok(false)
+}
+
 fn check(inv: &Invocation) -> Result<bool, String> {
-    let rubrics = staged_rubrics(inv)?;
+    let rubrics = staged_rubrics(&inv.docs)?;
     if !rubrics.is_empty() {
         report::circular(&inv.gate, &rubrics);
         return Ok(false);
@@ -180,18 +215,22 @@ fn main() -> ExitCode {
         println!("{USAGE}");
         return ExitCode::SUCCESS;
     }
-    let inv = match parse(args.into_iter()) {
-        Ok(inv) => inv,
+    let mode = match parse(args.into_iter()) {
+        Ok(mode) => mode,
         Err(detail) => {
             eprintln!("git-agent-verdict: {detail}\n{USAGE}");
             return ExitCode::from(2);
         }
     };
-    match check(&inv) {
+    let (label, outcome) = match &mode {
+        Mode::Gate(inv) => (inv.gate.as_str(), check(inv)),
+        Mode::RubricGuard(docs) => (GUARD_LABEL, rubric_guard(docs)),
+    };
+    match outcome {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::FAILURE,
         Err(detail) => {
-            eprintln!("git-agent-verdict: {}: {detail}", inv.gate);
+            eprintln!("git-agent-verdict: {label}: {detail}");
             ExitCode::from(2)
         }
     }

@@ -45,13 +45,22 @@ pub fn missing(inv: &Invocation, detail: &str) {
     eprintln!("{}", prompt(inv));
 }
 
-pub fn circular(gate: &str, rubrics: &[String]) {
-    eprintln!("\ngit-agent-verdict: {gate}: RUBRIC IS STAGED\n");
+fn refused(label: &str, judged_by: &str, rubrics: &[String]) {
+    eprintln!("\ngit-agent-verdict: {label}: RUBRIC IS STAGED\n");
     eprintln!("  {}", rubrics.join("\n  "));
-    eprintln!("\nThis commit changes a yardstick the {gate} review is judged against. Judging a");
-    eprintln!("change to the measure against that same measure is circular, so it lands on its");
-    eprintln!("own, unreviewed:\n\n  git commit --no-verify\n");
+    eprintln!("\nThis commit changes a yardstick {judged_by} is judged against.");
+    eprintln!("Judging a change to the measure against that same measure is circular, so it");
+    eprintln!("lands on its own, unreviewed:\n\n  git commit --no-verify\n");
     eprintln!("Keep it in a SEPARATE commit from any other change, which still needs its review.");
+}
+
+pub fn circular(gate: &str, rubrics: &[String]) {
+    refused(gate, &format!("the {gate} review"), rubrics);
+}
+
+// The preflight names no gate: it holds the whole hook's rubrics, and the staged one may belong to any of them.
+pub fn preflight(rubrics: &[String]) {
+    refused(crate::GUARD_LABEL, "a review in this hook", rubrics);
 }
 
 pub fn attested(gate: &str, count: usize, minor: u32) {
