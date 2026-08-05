@@ -8,7 +8,8 @@ use std::process::ExitCode;
 
 const USAGE: &str = concat!(
     "usage: git-agent-verdict <msg-file> <gate> [--per-file] --doc <path>... --path <pathspec>...\n",
-    "       git-agent-verdict --rubric-guard --doc <path>..."
+    "       git-agent-verdict --rubric-guard --doc <path>...\n\
+       git-agent-verdict --reviewer-prompt <gate> --doc <path>..."
 );
 
 const GUARD_LABEL: &str = "rubric-guard";
@@ -25,6 +26,7 @@ pub struct Invocation {
 enum Mode {
     Gate(Invocation),
     RubricGuard(Vec<String>),
+    ReviewerPrompt(String, Vec<String>),
 }
 
 // Resolved once, here: the reviewer block promises absolute paths, and an unresolvable doc would silently exempt itself from the rubric guards.
@@ -42,11 +44,15 @@ fn canonical_docs(docs: Vec<String>) -> Result<Vec<String>, String> {
 fn parse(args: impl Iterator<Item = String>) -> Result<Mode, String> {
     let mut positional = Vec::new();
     let (mut guard, mut per_file) = (false, false);
+    let mut reviewer_prompt: Option<String> = None;
     let (mut docs, mut paths) = (Vec::new(), Vec::new());
     let mut args = args;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--rubric-guard" => guard = true,
+            "--reviewer-prompt" => {
+                reviewer_prompt = Some(args.next().ok_or("--reviewer-prompt needs a gate name")?)
+            }
             "--per-file" => per_file = true,
             "--doc" => docs.push(args.next().ok_or("--doc needs a path")?),
             "--path" => paths.push(args.next().ok_or("--path needs a pathspec")?),
@@ -57,6 +63,13 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Mode, String> {
     // A preflight guarding nothing is a hook that has silently stopped guarding, so an empty list is an error in both modes rather than a vacuous pass.
     if docs.is_empty() {
         return Err("at least one --doc is required".to_string());
+    }
+    if let Some(gate) = reviewer_prompt {
+        if guard || per_file || !paths.is_empty() || !positional.is_empty() {
+            let detail = "--reviewer-prompt takes a gate and --doc only: no <msg-file>, --path, --per-file or --rubric-guard";
+            return Err(detail.to_string());
+        }
+        return Ok(Mode::ReviewerPrompt(gate, canonical_docs(docs)?));
     }
     if guard {
         if per_file || !paths.is_empty() || !positional.is_empty() {
@@ -225,6 +238,10 @@ fn main() -> ExitCode {
     let (label, outcome) = match &mode {
         Mode::Gate(inv) => (inv.gate.as_str(), check(inv)),
         Mode::RubricGuard(docs) => (GUARD_LABEL, rubric_guard(docs)),
+        Mode::ReviewerPrompt(gate, docs) => {
+            println!("{}", report::prompt(gate, docs));
+            return ExitCode::SUCCESS;
+        }
     };
     match outcome {
         Ok(true) => ExitCode::SUCCESS,

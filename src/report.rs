@@ -12,9 +12,8 @@ pub fn skipped(gate: &str, paths: &[String]) {
     );
 }
 
-fn prompt(inv: &Invocation) -> String {
-    let docs = inv
-        .docs
+pub fn prompt(gate: &str, docs: &[String]) -> String {
+    let docs = docs
         .iter()
         .map(|d| format!("  {d}"))
         .collect::<Vec<_>>()
@@ -24,7 +23,7 @@ fn prompt(inv: &Invocation) -> String {
         .skip(1)
         .collect::<Vec<_>>()
         .join("\n")
-        .replace("{{gate}}", &inv.gate)
+        .replace("{{gate}}", gate)
         .replace("{{docs}}", &docs)
 }
 
@@ -42,7 +41,7 @@ pub fn missing(inv: &Invocation, detail: &str) {
     eprintln!("the block below, iterate `re-review` until it reports major=0 and moderate=0, then");
     eprintln!("write its counts into the trailer. Trailers must be the LAST paragraph.\n");
     eprintln!("── FORWARD BELOW THIS LINE ──");
-    eprintln!("{}", prompt(inv));
+    eprintln!("{}", prompt(&inv.gate, &inv.docs));
 }
 
 fn refused(label: &str, judged_by: &str, rubrics: &[String]) {

@@ -318,3 +318,38 @@ fn an_agent_coauthor_line_is_dropped_but_a_human_one_is_kept() {
     assert!(rewritten.contains("claude@example.com"), "{rewritten}");
     assert!(rewritten.contains("Reviewed-standards:"), "{rewritten}");
 }
+
+#[test]
+fn reviewer_prompt_emits_the_block_on_stdout_without_a_message() {
+    let repo = Repo::new();
+    let out = std::process::Command::new(BIN)
+        .current_dir(&repo.dir)
+        .args(["--reviewer-prompt", "standards", "--doc", "rubric.md"])
+        .output()
+        .expect("binary runs");
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(0), "{text}");
+    assert!(text.contains("NEUTRAL REVIEW — gate: standards"), "{text}");
+    assert!(text.contains("INTENT:"), "{text}");
+    assert!(text.contains("rubric.md"), "{text}");
+}
+
+#[test]
+fn reviewer_prompt_refuses_the_gate_mode_flags() {
+    let repo = Repo::new();
+    for extra in [
+        vec!["--path", "."],
+        vec!["--per-file"],
+        vec!["--rubric-guard"],
+        vec!["MSG"],
+    ] {
+        let mut args = vec!["--reviewer-prompt", "standards", "--doc", "rubric.md"];
+        args.extend(extra.iter());
+        let out = std::process::Command::new(BIN)
+            .current_dir(&repo.dir)
+            .args(&args)
+            .output()
+            .expect("binary runs");
+        assert_eq!(out.status.code(), Some(2), "{args:?}");
+    }
+}

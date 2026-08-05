@@ -45,7 +45,7 @@ The missing trailer comes first, then the prompt that earns it. Target and remed
 filled in, and keeps the session id.
 
 ```console
-$ my-code-review --json "<the block from step 1>
+$ my-code-review --json "$(git agent-verdict --reviewer-prompt standards --doc docs/repo-standards.md)
 INTENT: the commit-msg hook delegates verdict verification to an external CLI and
         keeps only the gate declarations."
 {"session_id":"a6f63e4b","result":"- KISS: none\n- SoC: MODERATE — install.sh declares\nthe roster twice and the gate holds neither\n...\nmajor=0 moderate=1 minor=3"}

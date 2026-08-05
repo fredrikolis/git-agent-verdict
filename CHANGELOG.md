@@ -5,6 +5,14 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/).
 
+## [0.1.5] - 2026-08-05
+
+### Added
+- `--reviewer-prompt <gate> --doc <path>...` prints the reviewer block on stdout and exits 0. Before
+  this the block could only be obtained by failing a gate, so wiring a repo up meant provoking a
+  failure to read the instructions. It takes no message file: the block is rendered from the gate
+  name and the doc list alone, and at the point it is wanted no trailer has been written yet.
+
 ## [0.1.4] - 2026-08-05
 
 ### Added
@@ -67,6 +75,7 @@ to [Semantic Versioning](https://semver.org/).
 - An exemption for the subjects git writes itself. `Merge` and `Revert` are honoured only when
   `MERGE_HEAD` or `REVERT_HEAD` confirms them, so a hand-typed subject cannot forge it.
 
+[0.1.5]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.1.5
 [0.1.4]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.1.4
 [0.1.3]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.1.3
 [0.1.2]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.1.2
