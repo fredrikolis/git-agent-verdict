@@ -111,6 +111,18 @@ When a trailer is missing the tool prints it first, then the reviewer prompt tha
 agent has the target and the remedy in one turn. The other failures name what is wrong and stop. The prompt is embedded in the binary, which is what
 stops it becoming a per-repo file that drifts.
 
+## The one edit it makes
+
+A `Co-authored-by:` trailer whose address is `@anthropic.com` is removed from the message. Every
+commit in a repo gated this way is agent-written, so a fixed attribution line is constant and
+carries nothing, while `reviewer=` in each verdict already records who did the work.
+
+The match is on the address, not the name, so a human co-author called Claude keeps their credit,
+and no other trailer is touched. `Signed-off-by`, DCO trailers and anyone else's `Co-authored-by`
+survive untouched.
+
+This is the only case where the tool writes to the message rather than reading it.
+
 ## Circular-rubric guard
 
 A commit that stages one of its own `--doc` files is refused, and told to land alone via

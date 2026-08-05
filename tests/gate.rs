@@ -227,3 +227,19 @@ fn version_and_help_are_info_flags_that_exit_clean() {
         assert!(text.contains(needle), "{flag}: {text}");
     }
 }
+
+#[test]
+fn an_agent_coauthor_line_is_dropped_but_a_human_one_is_kept() {
+    let repo = Repo::new();
+    repo.stage(&["src.rs"]);
+    let msg = "subject\n\nbody\n\n\
+        Reviewed-standards: reviewer=opus major=0 moderate=0 minor=0\n\
+        Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>\n\
+        Co-authored-by: Claude Bernard <claude@example.com>\n";
+    let (code, out) = repo.standards(msg);
+    assert_eq!(code, 0, "{out}");
+    let rewritten = std::fs::read_to_string(repo.dir.join("MSG")).expect("read back");
+    assert!(!rewritten.contains("anthropic.com"), "{rewritten}");
+    assert!(rewritten.contains("claude@example.com"), "{rewritten}");
+    assert!(rewritten.contains("Reviewed-standards:"), "{rewritten}");
+}

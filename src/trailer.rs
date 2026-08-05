@@ -78,6 +78,14 @@ pub fn parse_for(gate: &str, block: &str) -> Result<Vec<Verdict>, String> {
     Ok(verdicts)
 }
 
+// Matched on the address, not the name: a human co-author called Claude keeps their credit.
+pub fn is_agent_coauthor(line: &str) -> bool {
+    let Some((key, value)) = line.split_once(':') else {
+        return false;
+    };
+    key.eq_ignore_ascii_case("co-authored-by") && value.contains("@anthropic.com")
+}
+
 // git only parses a trailing paragraph, so a trailer written mid-body is invisible to it.
 pub fn present_but_unparsed(gate: &str, raw: &str, block: &str) -> bool {
     let key = key_for(gate);

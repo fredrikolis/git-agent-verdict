@@ -5,6 +5,13 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/).
 
+## [0.1.3] - 2026-08-05
+
+### Added
+- The agent `Co-authored-by:` trailer is dropped from the commit message. Matched on an
+  `@anthropic.com` address rather than on the name, so a human co-author called Claude keeps their
+  credit and no other trailer is touched. This is the only edit the tool makes to a message.
+
 ## [0.1.2] - 2026-08-05
 
 ### Added
@@ -44,6 +51,7 @@ to [Semantic Versioning](https://semver.org/).
 - An exemption for the subjects git writes itself. `Merge` and `Revert` are honoured only when
   `MERGE_HEAD` or `REVERT_HEAD` confirms them, so a hand-typed subject cannot forge it.
 
+[0.1.3]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.1.3
 [0.1.2]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.1.2
 [0.1.1]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.1.1
 [0.1.0]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.1.0

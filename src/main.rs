@@ -93,6 +93,21 @@ fn staged_rubrics(inv: &Invocation) -> Result<Vec<String>, String> {
     Ok(in_repo.into_iter().filter(|d| staged.contains(d)).collect())
 }
 
+// The one edit this tool makes to a message: every commit in a repo gated this way is agent-written, so a fixed attribution line is constant and carries nothing.
+fn drop_agent_coauthor(msg_file: &str, raw: &str) -> Result<String, String> {
+    if !raw.lines().any(trailer::is_agent_coauthor) {
+        return Ok(raw.to_string());
+    }
+    let kept: Vec<&str> = raw
+        .lines()
+        .filter(|l| !trailer::is_agent_coauthor(l))
+        .collect();
+    let mut text = kept.join("\n");
+    text.push('\n');
+    std::fs::write(msg_file, &text).map_err(|e| format!("cannot rewrite {msg_file}: {e}"))?;
+    Ok(text)
+}
+
 fn check(inv: &Invocation) -> Result<bool, String> {
     let rubrics = staged_rubrics(inv)?;
     if !rubrics.is_empty() {
@@ -116,6 +131,7 @@ fn check(inv: &Invocation) -> Result<bool, String> {
     if auto_generated(&raw) {
         return Ok(true);
     }
+    let raw = drop_agent_coauthor(&inv.msg_file, &raw)?;
     let block = git::trailers(&inv.msg_file)?;
     let verdicts = match trailer::parse_for(&inv.gate, &block) {
         Ok(verdicts) => verdicts,
