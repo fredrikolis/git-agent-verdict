@@ -5,7 +5,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/).
 
-## [0.1.5] - 2026-08-05
+## [0.1.6] - 2026-08-05
 
 ### Added
 - `--reviewer-prompt <gate>` prints that gate's reviewer block on stdout and exits 0, so it can be
@@ -78,7 +78,7 @@ to [Semantic Versioning](https://semver.org/).
 - An exemption for the subjects git writes itself. `Merge` and `Revert` are honoured only when
   `MERGE_HEAD` or `REVERT_HEAD` confirms them, so a hand-typed subject cannot forge it.
 
-[0.1.5]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.1.5
+[0.1.6]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.1.6
 [0.1.4]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.1.4
 [0.1.3]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.1.3
 [0.1.2]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.1.2
