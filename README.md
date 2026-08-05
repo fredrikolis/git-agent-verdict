@@ -45,11 +45,16 @@ The missing trailer comes first, then the prompt that earns it. Target and remed
 filled in, and keeps the session id.
 
 ```console
-$ my-code-review --json "$(git agent-verdict --reviewer-prompt standards --doc docs/repo-standards.md)
-INTENT: the commit-msg hook delegates verdict verification to an external CLI and
-        keeps only the gate declarations."
+$ git agent-verdict --reviewer-prompt standards | my-code-review --json - \
+    "INTENT: the commit-msg hook delegates verdict verification to an external CLI
+             and keeps only the gate declarations."
 {"session_id":"a6f63e4b","result":"- KISS: none\n- SoC: MODERATE — install.sh declares\nthe roster twice and the gate holds neither\n...\nmajor=0 moderate=1 minor=3"}
 ```
+
+`--reviewer-prompt` takes the gate name and nothing else: the docs come from the `commit-msg` hook,
+which already declares them, by re-running it in a mode where each gate prints its declaration
+instead of validating. The shell expands whatever the hook wrote, so a `--doc \"$KB/standards.md\"`
+resolves the same way it does at commit time.
 
 The `INTENT` is flat, and it is the only thing added. Naming what changed, or what the author
 suspects, tells the reviewer what counts, and it will find that and stop looking.

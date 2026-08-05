@@ -8,10 +8,13 @@ to [Semantic Versioning](https://semver.org/).
 ## [0.1.5] - 2026-08-05
 
 ### Added
-- `--reviewer-prompt <gate> --doc <path>...` prints the reviewer block on stdout and exits 0. Before
-  this the block could only be obtained by failing a gate, so wiring a repo up meant provoking a
-  failure to read the instructions. It takes no message file: the block is rendered from the gate
-  name and the doc list alone, and at the point it is wanted no trailer has been written yet.
+- `--reviewer-prompt <gate>` prints that gate's reviewer block on stdout and exits 0, so it can be
+  piped straight into a reviewer. Before this the block could only be obtained by failing a gate, so
+  wiring a repo up meant provoking a failure to read the instructions. It takes the gate name and
+  nothing else: the docs come from the `commit-msg` hook, which is re-run with
+  `GIT_AGENT_VERDICT_LIST` set so each gate prints its declaration instead of validating. Reading the
+  hook as text would not do, because every real hook writes its docs through a shell variable. An
+  unknown gate name exits 2 and lists the gates the hook does declare.
 
 ## [0.1.4] - 2026-08-05
 

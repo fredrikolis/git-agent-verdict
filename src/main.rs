@@ -9,10 +9,13 @@ use std::process::ExitCode;
 const USAGE: &str = concat!(
     "usage: git-agent-verdict <msg-file> <gate> [--per-file] --doc <path>... --path <pathspec>...\n",
     "       git-agent-verdict --rubric-guard --doc <path>...\n\
-       git-agent-verdict --reviewer-prompt <gate> --doc <path>..."
+       git-agent-verdict --reviewer-prompt <gate>"
 );
 
 const GUARD_LABEL: &str = "rubric-guard";
+
+// Set while the hook is re-run to enumerate itself: every gate prints its declaration and exits instead of validating, so the doc list is read from the hook rather than retyped beside it.
+const LIST_ENV: &str = "GIT_AGENT_VERDICT_LIST";
 
 pub struct Invocation {
     pub msg_file: String,
@@ -26,7 +29,7 @@ pub struct Invocation {
 enum Mode {
     Gate(Invocation),
     RubricGuard(Vec<String>),
-    ReviewerPrompt(String, Vec<String>),
+    ReviewerPrompt(String),
 }
 
 // Resolved once, here: the reviewer block promises absolute paths, and an unresolvable doc would silently exempt itself from the rubric guards.
@@ -60,16 +63,17 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Mode, String> {
             value => positional.push(value.to_string()),
         }
     }
+    if let Some(gate) = reviewer_prompt {
+        if guard || per_file || !docs.is_empty() || !paths.is_empty() || !positional.is_empty() {
+            let detail =
+                "--reviewer-prompt takes a gate name only: its docs come from the commit-msg hook";
+            return Err(detail.to_string());
+        }
+        return Ok(Mode::ReviewerPrompt(gate));
+    }
     // A preflight guarding nothing is a hook that has silently stopped guarding, so an empty list is an error in both modes rather than a vacuous pass.
     if docs.is_empty() {
         return Err("at least one --doc is required".to_string());
-    }
-    if let Some(gate) = reviewer_prompt {
-        if guard || per_file || !paths.is_empty() || !positional.is_empty() {
-            let detail = "--reviewer-prompt takes a gate and --doc only: no <msg-file>, --path, --per-file or --rubric-guard";
-            return Err(detail.to_string());
-        }
-        return Ok(Mode::ReviewerPrompt(gate, canonical_docs(docs)?));
     }
     if guard {
         if per_file || !paths.is_empty() || !positional.is_empty() {
@@ -156,7 +160,43 @@ fn rubric_guard(docs: &[String]) -> Result<bool, String> {
     Ok(false)
 }
 
+// Re-running the hook is what resolves `$KB/foo.md` and friends: the shell expands them, where reading the hook as text could not.
+fn reviewer_prompt(want: &str) -> Result<bool, String> {
+    let hook = git::hook_path()?;
+    let out = std::process::Command::new(&hook)
+        .arg("/dev/null")
+        .env(LIST_ENV, "1")
+        .output()
+        .map_err(|e| format!("cannot run {hook}: {e}"))?;
+    let listing = String::from_utf8_lossy(&out.stdout).into_owned();
+    let mut declared = Vec::new();
+    for line in listing.lines() {
+        let mut fields = line.split('\t');
+        let Some(gate) = fields.next() else { continue };
+        let docs: Vec<String> = fields.map(str::to_string).collect();
+        if docs.is_empty() {
+            continue;
+        }
+        if gate == want {
+            println!("{}", report::prompt(gate, &docs));
+            return Ok(true);
+        }
+        declared.push(gate.to_string());
+    }
+    if declared.is_empty() {
+        return Err(format!("{hook} declared no gates"));
+    }
+    Err(format!(
+        "no gate '{want}' in {hook}; it declares: {}",
+        declared.join(", ")
+    ))
+}
+
 fn check(inv: &Invocation) -> Result<bool, String> {
+    if std::env::var_os(LIST_ENV).is_some() {
+        println!("{}\t{}", inv.gate, inv.docs.join("\t"));
+        return Ok(true);
+    }
     let rubrics = staged_rubrics(&inv.docs)?;
     if !rubrics.is_empty() {
         report::circular(&inv.gate, &rubrics);
@@ -238,10 +278,7 @@ fn main() -> ExitCode {
     let (label, outcome) = match &mode {
         Mode::Gate(inv) => (inv.gate.as_str(), check(inv)),
         Mode::RubricGuard(docs) => (GUARD_LABEL, rubric_guard(docs)),
-        Mode::ReviewerPrompt(gate, docs) => {
-            println!("{}", report::prompt(gate, docs));
-            return ExitCode::SUCCESS;
-        }
+        Mode::ReviewerPrompt(gate) => ("reviewer-prompt", reviewer_prompt(gate)),
     };
     match outcome {
         Ok(true) => ExitCode::SUCCESS,

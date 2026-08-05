@@ -66,6 +66,16 @@ pub fn relative_to_root(doc: &str) -> Option<String> {
     Some(rest.to_string_lossy().into_owned())
 }
 
+// Resolved through git so `core.hooksPath` is honoured; a repo that relocates its hooks still works.
+pub fn hook_path() -> Result<String, String> {
+    let out = run(&["rev-parse", "--git-path", "hooks/commit-msg"])?;
+    let path = String::from_utf8_lossy(&out).trim().to_string();
+    if std::path::Path::new(&path).exists() {
+        return Ok(path);
+    }
+    Err(format!("no commit-msg hook at {path}"))
+}
+
 // Confirmed from git's own state, so a hand-typed subject cannot forge the exemption.
 pub fn in_progress(marker: &str) -> bool {
     let Ok(out) = run(&["rev-parse", "--git-path", marker]) else {

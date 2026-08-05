@@ -320,18 +320,39 @@ fn an_agent_coauthor_line_is_dropped_but_a_human_one_is_kept() {
 }
 
 #[test]
-fn reviewer_prompt_emits_the_block_on_stdout_without_a_message() {
+fn reviewer_prompt_reads_its_docs_from_the_hook() {
     let repo = Repo::new();
+    repo.write(
+        "hook",
+        "#!/bin/sh\nexec git-agent-verdict \"$1\" standards --doc rubric.md --path .\n",
+    );
+    let hooks = repo.dir.join("hooks");
+    std::fs::create_dir_all(&hooks).expect("hooks dir");
+    std::fs::rename(repo.dir.join("hook"), hooks.join("commit-msg")).expect("place hook");
+    git(&repo.dir, &["config", "core.hooksPath", "hooks"]);
+    let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
+    std::fs::set_permissions(hooks.join("commit-msg"), mode).expect("chmod");
+
     let out = std::process::Command::new(BIN)
         .current_dir(&repo.dir)
-        .args(["--reviewer-prompt", "standards", "--doc", "rubric.md"])
+        .args(["--reviewer-prompt", "standards"])
         .output()
         .expect("binary runs");
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
-    assert_eq!(out.status.code(), Some(0), "{text}");
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(0), "{err}");
     assert!(text.contains("NEUTRAL REVIEW — gate: standards"), "{text}");
     assert!(text.contains("INTENT:"), "{text}");
     assert!(text.contains("rubric.md"), "{text}");
+
+    let out = std::process::Command::new(BIN)
+        .current_dir(&repo.dir)
+        .args(["--reviewer-prompt", "nope"])
+        .output()
+        .expect("binary runs");
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(2), "{err}");
+    assert!(err.contains("it declares: standards"), "{err}");
 }
 
 #[test]
@@ -340,10 +361,10 @@ fn reviewer_prompt_refuses_the_gate_mode_flags() {
     for extra in [
         vec!["--path", "."],
         vec!["--per-file"],
-        vec!["--rubric-guard"],
+        vec!["--doc", "rubric.md"],
         vec!["MSG"],
     ] {
-        let mut args = vec!["--reviewer-prompt", "standards", "--doc", "rubric.md"];
+        let mut args = vec!["--reviewer-prompt", "standards"];
         args.extend(extra.iter());
         let out = std::process::Command::new(BIN)
             .current_dir(&repo.dir)
