@@ -7,6 +7,100 @@ verdict.
 
 Built for repos where commits are written by agents. No human is expected to write a trailer.
 
+**Why it exists:** so a repo can stay about its own code. Every repo that wants agent-written commits
+reviewed ends up growing the same few hundred lines of bash to demand and check an attestation, and
+every copy drifts from the others. That machinery is not what any of those repos are for. This is
+that machinery, once, outside them.
+
+## How it goes
+
+The agent is never briefed on the review process. It is told to do the work, it does it, and it
+tries to commit. The commit fails by design, and the gate prints what it wants.
+
+**1. The agent finishes the work and commits.**
+
+```console
+$ git commit
+git-agent-verdict: standards: REVIEW GATE FAILED
+
+MISSING — the message needs this trailer and has none
+
+  Reviewed-standards: reviewer=<id> major=0 moderate=0 minor=<n>
+
+Earned by a review you run yourself: spawn a reviewer in a fresh context, hand it
+the block below, iterate `re-review` until it reports major=0 and moderate=0, then
+write its counts into the trailer. Trailers must be the LAST paragraph.
+
+── FORWARD BELOW THIS LINE ──
+NEUTRAL REVIEW — gate: standards
+
+Hand a reviewer in a FRESH context exactly this block with the INTENT filled in, plus
+where the repo is, and nothing else. Past that the diff is the only signal it gets
+...
+```
+
+The missing trailer comes first, then the prompt that earns it. Target and remedy in one turn.
+
+**2. The agent spawns a reviewer** in a fresh context, hands it that block verbatim with one slot
+filled in, and keeps the session id.
+
+```console
+$ my-code-review --json "<the block from step 1>
+INTENT: the commit-msg hook delegates verdict verification to an external CLI and
+        keeps only the gate declarations."
+{"session_id":"a6f63e4b","result":"- KISS: none\n- SoC: MODERATE — install.sh declares\nthe roster twice and the gate holds neither\n...\nmajor=0 moderate=1 minor=3"}
+```
+
+The `INTENT` is flat, and it is the only thing added. Naming what changed, or what the author
+suspects, tells the reviewer what counts, and it will find that and stop looking.
+
+**3. The agent fixes the MODERATE, then resumes that same reviewer with one word.**
+
+```console
+$ my-code-review --resume a6f63e4b "re-review"
+major=0 moderate=0 minor=3
+```
+
+Not a new reviewer, which would need re-briefing and would arrive with no memory of its own
+findings. Not a summary of what was fixed, which would steer the second look exactly the way the
+first was kept from being steered.
+
+**4. Repeat per gate, in the hook's order, never in parallel.** A gate judging annotations must not
+run while the gate judging code is still changing them.
+
+**5. Commit again.**
+
+```console
+$ git commit
+git-agent-verdict: standards: attested (1 verdict(s), minor=3)
+git-agent-verdict: annotations: attested (5 verdict(s), minor=2)
+git-agent-verdict: prose: skipped (no staged file matches README.md, CONTRIBUTING.md)
+[main 4f2a1c8] Delegate the commit-msg review gate to git-agent-verdict
+```
+
+Nothing in that loop was configured, and `my-code-review` is a stand-in: the gate never sees the
+reviewer, only the trailer it produces. The requirement was printed at the moment it was wanted,
+which is what keeps the process out of the agent's briefing and out of the repo's docs.
+
+## The commit message it produces
+
+```
+Delegate the commit-msg review gate to git-agent-verdict
+
+The hook implemented verdict-checking itself in 267 lines of bash, duplicated in
+two sibling repos with three distinct md5s between them. That mechanism is now an
+external CLI, and the hook keeps only the gate declarations.
+
+Reviewed-standards: reviewer=claude-opus-5 major=0 moderate=0 minor=3
+Reviewed-annotations: reviewer=claude-opus-5 major=0 moderate=0 minor=1 file=src/gate.rs
+Reviewed-annotations: reviewer=claude-opus-5 major=0 moderate=0 minor=0 file=src/trailer.rs
+Reviewed-prose: reviewer=claude-opus-5 major=0 moderate=0 minor=0
+```
+
+Subject, body, then the trailers as the last paragraph. One per gate, plus one per file where the
+gate is `--per-file`. The counts are the verdict, and they are on the record with a name against
+them.
+
 ## Trust model
 
 The gate verifies that an attestation is PRESENT and WELL-FORMED. It cannot verify that a review
@@ -28,6 +122,32 @@ The tool detects that case by name rather than reporting the trailer as missing.
 The counts are the whole verdict, and asking for three numbers rather than a verdict is deliberate.
 A reviewer that reports `major=0` has committed to a number it can be held to, which matters
 precisely because the writer is an LLM.
+
+## Usage
+
+```
+git-agent-verdict <msg-file> <gate> [--per-file] --doc <path>... --path <pathspec>...
+git-agent-verdict --rubric-guard --doc <path>...
+```
+
+Installs as `git agent-verdict`. Every list is a repeated singular flag. No variadic can absorb the
+token meant for its neighbour, which would otherwise leave a gate silently skipped.
+
+The second form is the rubric preflight, described below. It reads the index alone, so it takes
+neither a message file nor a gate.
+
+`--path` goes straight to `git diff --cached`, so git's pathspec syntax comes free. No staged file
+matching it means the gate is skipped, and the tool says so: a mis-scoped pathspec otherwise looks
+identical to a passing commit. A literal `--path` naming nothing git tracks is a typo, and fails.
+
+`--per-file` demands one trailer per staged file, deletions excluded, with the list taken from git
+rather than from the author. An author-supplied list decides what gets looked at, and that is where a missed file hides.
+It is the one check the author cannot fake by scoping.
+
+Auto-generated messages (`Merge`, `Revert`, `fixup!`, `squash!`) carry no review and pass. `Merge`
+and `Revert` are trusted only when git's own in-progress state confirms them.
+
+Exit status: 0 pass or skip, 1 gate failed, 2 usage or git error.
 
 ## The ladder
 
@@ -71,32 +191,6 @@ this one, both of which never settled:
 |---|---|
 | "Report any issues you can find." | It always found one, however minuscule. No round came back empty. |
 | "Stop when every criterion scores above 9/10." | Driving DbC past 9 pushed KISS under it, and the next round traded back. |
-
-## Usage
-
-```
-git-agent-verdict <msg-file> <gate> [--per-file] --doc <path>... --path <pathspec>...
-git-agent-verdict --rubric-guard --doc <path>...
-```
-
-Installs as `git agent-verdict`. Every list is a repeated singular flag. No variadic can absorb the
-token meant for its neighbour, which would otherwise leave a gate silently skipped.
-
-The second form is the rubric preflight, described below. It reads the index alone, so it takes
-neither a message file nor a gate.
-
-`--path` goes straight to `git diff --cached`, so git's pathspec syntax comes free. No staged file
-matching it means the gate is skipped, and the tool says so: a mis-scoped pathspec otherwise looks
-identical to a passing commit. A literal `--path` naming nothing git tracks is a typo, and fails.
-
-`--per-file` demands one trailer per staged file, deletions excluded, with the list taken from git
-rather than from the author. An author-supplied list decides what gets looked at, and that is where a missed file hides.
-It is the one check the author cannot fake by scoping.
-
-Auto-generated messages (`Merge`, `Revert`, `fixup!`, `squash!`) carry no review and pass. `Merge`
-and `Revert` are trusted only when git's own in-progress state confirms them.
-
-Exit status: 0 pass or skip, 1 gate failed, 2 usage or git error.
 
 ## Wiring it into a repo
 
