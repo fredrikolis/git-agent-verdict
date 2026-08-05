@@ -214,3 +214,16 @@ fn the_prompt_demands_an_intent_and_says_how_to_judge_it() {
     );
     assert!(out.contains("Scope is not your question"), "{out}");
 }
+
+#[test]
+fn version_and_help_are_info_flags_that_exit_clean() {
+    for (flag, needle) in [("--version", "git-agent-verdict 0."), ("--help", "usage:")] {
+        let out = std::process::Command::new(BIN)
+            .arg(flag)
+            .output()
+            .expect("binary runs");
+        let text = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert_eq!(out.status.code(), Some(0), "{flag}: {text}");
+        assert!(text.contains(needle), "{flag}: {text}");
+    }
+}

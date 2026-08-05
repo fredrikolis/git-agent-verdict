@@ -5,6 +5,13 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/).
 
+## [0.1.2] - 2026-08-05
+
+### Added
+- `--version` / `-V` and `--help` / `-h`, both info flags that print and exit 0. Without a version
+  flag a consuming repo cannot pin the gate, and the trailer format plus the reviewer brief are the
+  gate's contract, so an unpinned install changes what every commit must carry.
+
 ## [0.1.1] - 2026-08-04
 
 ### Changed
@@ -37,5 +44,6 @@ to [Semantic Versioning](https://semver.org/).
 - An exemption for the subjects git writes itself. `Merge` and `Revert` are honoured only when
   `MERGE_HEAD` or `REVERT_HEAD` confirms them, so a hand-typed subject cannot forge it.
 
+[0.1.2]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.1.2
 [0.1.1]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.1.1
 [0.1.0]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.1.0

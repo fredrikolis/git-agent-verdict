@@ -155,7 +155,16 @@ fn check(inv: &Invocation) -> Result<bool, String> {
 }
 
 fn main() -> ExitCode {
-    let inv = match parse(std::env::args().skip(1)) {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("git-agent-verdict {}", env!("CARGO_PKG_VERSION"));
+        return ExitCode::SUCCESS;
+    }
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("{USAGE}");
+        return ExitCode::SUCCESS;
+    }
+    let inv = match parse(args.into_iter()) {
         Ok(inv) => inv,
         Err(detail) => {
             eprintln!("git-agent-verdict: {detail}\n{USAGE}");
