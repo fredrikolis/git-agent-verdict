@@ -17,35 +17,38 @@ that machinery, once, outside them.
 The agent is never briefed on the review process. It is told to do the work, it does it, and it
 tries to commit. The commit fails by design, and the gate prints what it wants.
 
+Gate names below (`my-code-review`) are repo-chosen labels, not keywords. A repo declares whatever
+gates it wants in its hook, one line each.
+
 **1. The agent finishes the work and commits.**
 
 ```console
 $ git commit
-git-agent-verdict: standards: REVIEW GATE FAILED
+git-agent-verdict: my-code-review: REVIEW GATE FAILED
 
 MISSING — the message needs this trailer and has none
 
-  Reviewed-standards: reviewer=<id> major=0 moderate=0 minor=<n>
+  Reviewed-my-code-review: reviewer=<id> major=0 moderate=0 minor=<n>
 
 Earned by a review you run yourself: spawn a reviewer in a fresh context, hand it
 the block below, iterate `re-review` until it reports major=0 and moderate=0, then
 write its counts into the trailer. Trailers must be the LAST paragraph.
 
 ── FORWARD BELOW THIS LINE ──
-NEUTRAL REVIEW — gate: standards
+NEUTRAL REVIEW — gate: my-code-review
 
-Hand a reviewer in a FRESH context exactly this block with the INTENT filled in, plus
-where the repo is, and nothing else. Past that the diff is the only signal it gets
+Hand a reviewer in a FRESH context exactly this block with the INTENT filled in, plus where the
+repo is, and nothing else. Past that the diff is the only signal it gets about where to look
 ...
 ```
 
 The missing trailer comes first, then the prompt that earns it. Target and remedy in one turn.
 
-**2. The agent spawns a reviewer** in a fresh context, hands it that block verbatim with one slot
-filled in, and keeps the session id.
+**2. The agent spawns a reviewer** in a fresh context, hands it that block with the `INTENT` filled
+in, and keeps the session id.
 
 ```console
-$ git agent-verdict --reviewer-prompt standards | my-code-review --json - \
+$ git agent-verdict --reviewer-prompt my-code-review | claude -p --output-format json \
     "INTENT: the commit-msg hook delegates verdict verification to an external CLI
              and keeps only the gate declarations."
 {"session_id":"a6f63e4b","result":"- KISS: none\n- SoC: MODERATE — install.sh declares\nthe roster twice and the gate holds neither\n...\nmajor=0 moderate=1 minor=3"}
@@ -53,16 +56,16 @@ $ git agent-verdict --reviewer-prompt standards | my-code-review --json - \
 
 `--reviewer-prompt` takes the gate name and nothing else: the docs come from the `commit-msg` hook,
 which already declares them, by re-running it in a mode where each gate prints its declaration
-instead of validating. The shell expands whatever the hook wrote, so a `--doc \"$KB/standards.md\"`
+instead of validating. The shell expands whatever the hook wrote, so a `--doc "$KB/standards.md"`
 resolves the same way it does at commit time.
 
-The `INTENT` is flat, and it is the only thing added. Naming what changed, or what the author
-suspects, tells the reviewer what counts, and it will find that and stop looking.
+The `INTENT` is flat, and it is the only thing added. Naming what changed, what was fixed, or what
+the author suspects tells the reviewer what counts, and it will find that and stop looking.
 
 **3. The agent fixes the MODERATE, then resumes that same reviewer with one word.**
 
 ```console
-$ my-code-review --resume a6f63e4b "re-review"
+$ claude -p --resume a6f63e4b "re-review"
 major=0 moderate=0 minor=3
 ```
 
@@ -77,15 +80,15 @@ run while the gate judging code is still changing them.
 
 ```console
 $ git commit
-git-agent-verdict: standards: attested (1 verdict(s), minor=3)
+git-agent-verdict: my-code-review: attested (1 verdict(s), minor=3)
 git-agent-verdict: annotations: attested (5 verdict(s), minor=2)
 git-agent-verdict: prose: skipped (no staged file matches README.md, CONTRIBUTING.md)
 [main 4f2a1c8] Delegate the commit-msg review gate to git-agent-verdict
 ```
 
-Nothing in that loop was configured, and `my-code-review` is a stand-in: the gate never sees the
-reviewer, only the trailer it produces. The requirement was printed at the moment it was wanted,
-which is what keeps the process out of the agent's briefing and out of the repo's docs.
+Nothing in that loop was configured. `claude -p` is one runtime; the gate never sees the reviewer,
+only the trailer it produces. The requirement was printed at the moment it was wanted, which is what
+keeps the process out of the agent's briefing and out of the repo's docs.
 
 ## The commit message it produces
 
@@ -96,7 +99,7 @@ The hook implemented verdict-checking itself in 267 lines of bash, duplicated in
 two sibling repos with three distinct md5s between them. That mechanism is now an
 external CLI, and the hook keeps only the gate declarations.
 
-Reviewed-standards: reviewer=claude-opus-5 major=0 moderate=0 minor=3
+Reviewed-my-code-review: reviewer=claude-opus-5 major=0 moderate=0 minor=3
 Reviewed-annotations: reviewer=claude-opus-5 major=0 moderate=0 minor=1 file=src/gate.rs
 Reviewed-annotations: reviewer=claude-opus-5 major=0 moderate=0 minor=0 file=src/trailer.rs
 Reviewed-prose: reviewer=claude-opus-5 major=0 moderate=0 minor=0
