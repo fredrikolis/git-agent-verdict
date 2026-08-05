@@ -322,9 +322,7 @@ fn an_agent_coauthor_line_is_dropped_but_a_human_one_is_kept() {
 #[test]
 fn reviewer_prompt_reads_its_docs_from_the_hook() {
     let repo = Repo::new();
-    // The hook must invoke the binary UNDER TEST by absolute path. Calling it by name resolves
-    // from PATH, which passes on a developer box with it installed and fails in CI, where the
-    // only build is the one cargo just made.
+    // By absolute path, not by name: a name resolves from PATH, which passes on a box with the tool installed and fails in CI, where the only build is the one cargo just made.
     repo.write(
         "hook",
         &format!("#!/bin/sh\nexec {BIN} \"$1\" standards --doc rubric.md --path .\n"),
