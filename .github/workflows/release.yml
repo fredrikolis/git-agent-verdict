@@ -74,9 +74,12 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           set -eu
-          if cargo publish 2>publish.err; then
+          # Capture OUTSIDE the checkout: cargo publish refuses on a dirty working
+          # directory, so a log file written here fails the publish it is recording.
+          err="$(mktemp)"
+          if cargo publish 2>"$err"; then
             exit 0
           fi
-          cat publish.err >&2
-          grep -qE 'already (exists|been uploaded|uploaded)' publish.err
+          cat "$err" >&2
+          grep -qE 'already (exists|been uploaded|uploaded)' "$err"
           echo "Version already on crates.io; nothing to do."
