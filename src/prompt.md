@@ -1,10 +1,22 @@
 <!-- Concern: the template every reviewer block renders from | Non-concern: when a review is demanded, or how a verdict is encoded | IO: none -->
 NEUTRAL REVIEW — gate: {{gate}}
 
-Hand a reviewer in a FRESH context exactly this block, plus where the repo is, and nothing else.
-The diff is the only signal it gets about where to look. Naming what you changed, what you fixed,
-or what you suspect tells it what counts, and it will find that and stop looking. To re-review,
-update the diff and say only `re-review`.
+Hand a reviewer in a FRESH context exactly this block with the INTENT filled in, plus where the
+repo is, and nothing else. Past that the diff is the only signal it gets about where to look.
+Naming what you changed, what you fixed, or what you suspect tells it what counts, and it will find
+that and stop looking. To re-review, update the diff and say only `re-review`.
+
+  INTENT: <what the diff sets out to do. State the aim flatly, as a spec would: no reason it is
+  worth doing, no defence of the approach, no account of what it replaces, no history of what was
+  already tried.>
+
+Judge that INTENT before anything else. If it gives a reason the change is worth doing, defends the
+approach, or accounts for what it replaces, stop there: report `MAJOR — the brief argues for the
+change`, `major=1 moderate=0 minor=0`, and review nothing. A reviewer handed a case for the change
+grades the case, and that is most of what stands between a review and a rubber stamp.
+
+Scope is not your question. It was settled before a plan existed, and you see neither the issue nor
+the case for the change. A scope observation is one MINOR line, never grounds to re-plan.
 
 Review the staged diff (git diff --cached) against these, read IN FULL by absolute path:
 {{docs}}

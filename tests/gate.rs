@@ -200,3 +200,17 @@ fn a_literal_path_naming_nothing_tracked_is_a_typo() {
     );
     assert_eq!(code, 2, "{out}");
 }
+
+#[test]
+fn the_prompt_demands_an_intent_and_says_how_to_judge_it() {
+    let repo = Repo::new();
+    repo.stage(&["src.rs"]);
+    let (code, out) = repo.standards("subject\n\nbody\n");
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("INTENT:"), "{out}");
+    assert!(
+        out.contains("Judge that INTENT before anything else"),
+        "{out}"
+    );
+    assert!(out.contains("Scope is not your question"), "{out}");
+}

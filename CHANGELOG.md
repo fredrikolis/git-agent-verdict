@@ -5,6 +5,20 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/).
 
+## [0.1.1] - 2026-08-04
+
+### Changed
+- The reviewer prompt now carries an `INTENT:` slot and tells the reviewer to judge it first,
+  rejecting a brief that argues for the change. Before this the prompt said to hand a reviewer the
+  block "and nothing else", which forbade attaching the intent the process requires, so the rule and
+  the surface that delivers it disagreed at the point of use.
+- The prompt states that scope is not the reviewer's question, so a scope observation comes back as
+  one MINOR line rather than as grounds to re-plan.
+
+### Documented
+- The circular-rubric guard sees only its own gate's `--doc` paths, so staging a later gate's rubric
+  costs one full review of an earlier gate before the refusal arrives.
+
 ## [0.1.0] - 2026-08-04
 
 ### Added
@@ -23,4 +37,5 @@ to [Semantic Versioning](https://semver.org/).
 - An exemption for the subjects git writes itself. `Merge` and `Revert` are honoured only when
   `MERGE_HEAD` or `REVERT_HEAD` confirms them, so a hand-typed subject cannot forge it.
 
+[0.1.1]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.1.1
 [0.1.0]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.1.0

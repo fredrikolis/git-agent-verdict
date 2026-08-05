@@ -117,8 +117,14 @@ A commit that stages one of its own `--doc` files is refused, and told to land a
 `--no-verify`. Judging a change to the measure against that same measure is circular.
 
 This is the one place the tool refuses rather than verifies. It lives here because the list of
-rubrics IS the list of `--doc` paths, and a copy in bash would be free to drift from it. Docs outside the worktree can never be
-staged, so the check is a no-op for them.
+rubrics IS the list of `--doc` paths, and a copy in bash would be free to drift from it. Docs
+outside the worktree can never be staged, so the check is a no-op for them.
+
+**Known limitation.** An invocation sees only its own `--doc` paths, so it cannot refuse on behalf
+of a gate further down the hook. Staging a later gate's rubric costs one full review of an earlier
+gate before the refusal arrives. Sharing the list across gates would mean declaring it twice, which
+is the drift this design exists to prevent, so the workaround is the rule the guard already states:
+land a rubric change on its own, first.
 
 ## Developing this repo
 
