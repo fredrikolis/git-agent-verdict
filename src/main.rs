@@ -9,8 +9,9 @@ use std::process::ExitCode;
 const USAGE: &str = concat!(
     "usage: git-agent-verdict <msg-file> <gate> [--per-file] [--simple] [--override-prompt <path>]\n",
     "                         --doc <path>... --path <pathspec>...\n",
-    "       git-agent-verdict --rubric-guard --doc <path>...\n\
-       git-agent-verdict --reviewer-prompt <gate>"
+    "       git-agent-verdict --rubric-guard --doc <path>...\n",
+    "       git-agent-verdict --reviewer-prompt <gate>\n",
+    "       git-agent-verdict --check-min-version <version>"
 );
 
 const GUARD_LABEL: &str = "rubric-guard";
@@ -39,6 +40,7 @@ enum Mode {
     Gate(Invocation),
     RubricGuard(Vec<String>),
     ReviewerPrompt(String),
+    MinVersion(String),
 }
 
 // Same reason as a doc: the reviewer block promises absolute paths, and a mistyped override would otherwise fall back to the built-in template without saying so.
@@ -64,6 +66,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Mode, String> {
     let mut positional = Vec::new();
     let (mut guard, mut per_file) = (false, false);
     let mut reviewer_prompt: Option<String> = None;
+    let mut min_version: Option<String> = None;
     let mut brief = Brief::default();
     let (mut docs, mut paths) = (Vec::new(), Vec::new());
     let mut args = args;
@@ -72,6 +75,9 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Mode, String> {
             "--rubric-guard" => guard = true,
             "--reviewer-prompt" => {
                 reviewer_prompt = Some(args.next().ok_or("--reviewer-prompt needs a gate name")?)
+            }
+            "--check-min-version" => {
+                min_version = Some(args.next().ok_or("--check-min-version needs a version")?)
             }
             "--simple" => brief.simple = true,
             "--override-prompt" => {
@@ -84,6 +90,21 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Mode, String> {
             flag if flag.starts_with('-') => return Err(format!("unknown flag '{flag}'")),
             value => positional.push(value.to_string()),
         }
+    }
+    // Answered from the binary's own version alone, so it takes nothing else: a hook runs it before it asks the tool for anything, where there is no gate to speak of yet.
+    if let Some(want) = min_version {
+        let anything_else = guard
+            || per_file
+            || brief.simple
+            || brief.prompt.is_some()
+            || reviewer_prompt.is_some()
+            || !docs.is_empty()
+            || !paths.is_empty()
+            || !positional.is_empty();
+        if anything_else {
+            return Err("--check-min-version takes a version only".to_string());
+        }
+        return Ok(Mode::MinVersion(want));
     }
     if let Some(gate) = reviewer_prompt {
         let gate_flags = per_file || brief.simple || brief.prompt.is_some();
@@ -126,6 +147,36 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Mode, String> {
         paths,
         brief,
     }))
+}
+
+fn fields(version: &str, what: &str) -> Result<Vec<u32>, String> {
+    version
+        .split('.')
+        .map(|f| {
+            f.parse::<u32>()
+                .map_err(|_| format!("{what} '{version}' is not a version like 0.2.0"))
+        })
+        .collect()
+}
+
+// A floor, not an equality: what must not arrive silently is a different reviewer brief, and that only happens when the floor is raised deliberately. An additive release passes.
+fn min_version(want: &str) -> Result<bool, String> {
+    let have = env!("CARGO_PKG_VERSION");
+    let (floor, installed) = (
+        fields(want, "--check-min-version")?,
+        fields(have, "this binary's version")?,
+    );
+    let width = floor.len().max(installed.len());
+    // Padded, because [0, 2] and [0, 2, 0] are one version and compare unequal as vectors.
+    let padded = |mut v: Vec<u32>| {
+        v.resize(width, 0);
+        v
+    };
+    if padded(installed) < padded(floor) {
+        report::stale(want, have);
+        return Ok(false);
+    }
+    Ok(true)
 }
 
 fn per_file_gaps(inv: &Invocation, verdicts: &[trailer::Verdict]) -> Result<Vec<String>, String> {
@@ -326,6 +377,7 @@ fn main() -> ExitCode {
         Mode::Gate(inv) => (inv.gate.as_str(), check(inv)),
         Mode::RubricGuard(docs) => (GUARD_LABEL, rubric_guard(docs)),
         Mode::ReviewerPrompt(gate) => ("reviewer-prompt", reviewer_prompt(gate)),
+        Mode::MinVersion(want) => ("check-min-version", min_version(want)),
     };
     match outcome {
         Ok(true) => ExitCode::SUCCESS,

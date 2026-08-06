@@ -238,6 +238,41 @@ fn version_and_help_are_info_flags_that_exit_clean() {
     }
 }
 
+// A floor: the release above it passes, which is the whole difference from pinning an equality.
+#[test]
+fn the_version_floor_passes_at_or_below_the_installed_version() {
+    let installed = env!("CARGO_PKG_VERSION");
+    for want in [installed, "0.0.1", "0.1"] {
+        let out = std::process::Command::new(BIN)
+            .args(["--check-min-version", want])
+            .output()
+            .expect("binary runs");
+        assert_eq!(out.status.code(), Some(0), "{want}: {out:?}");
+    }
+}
+
+#[test]
+fn a_floor_above_the_installed_version_fails_and_names_the_remedy() {
+    let out = std::process::Command::new(BIN)
+        .args(["--check-min-version", "99.0.0"])
+        .output()
+        .expect("binary runs");
+    let text = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(text.contains("cargo install git-agent-verdict"), "{text}");
+}
+
+#[test]
+fn a_floor_that_is_not_a_version_is_a_usage_error() {
+    for want in ["v0.3", "latest"] {
+        let out = std::process::Command::new(BIN)
+            .args(["--check-min-version", want])
+            .output()
+            .expect("binary runs");
+        assert_eq!(out.status.code(), Some(2), "{want}: {out:?}");
+    }
+}
+
 #[test]
 fn an_agent_coauthor_line_is_dropped_but_a_human_one_is_kept() {
     let repo = Repo::new();

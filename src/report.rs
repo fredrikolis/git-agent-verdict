@@ -107,6 +107,13 @@ pub fn blocked(gate: &str, major: u32) {
     eprintln!("not write the change, then implemented and reviewed afresh.");
 }
 
+// The install command is in the line: the reader is a hook's stderr, and an agent told only that the binary is old will otherwise invent one.
+pub fn stale(want: &str, have: &str) {
+    eprintln!(
+        "git-agent-verdict: {have} is older than the required {want}: cargo install git-agent-verdict --version '>={want}'"
+    );
+}
+
 pub fn malformed(gate: &str, detail: &str) {
     eprintln!("\ngit-agent-verdict: {gate}: MALFORMED TRAILER\n  {detail}");
 }

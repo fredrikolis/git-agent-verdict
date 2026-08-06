@@ -3,6 +3,8 @@ NEUTRAL REVIEW — gate: {{gate}}
 
 Hand a reviewer in a FRESH context exactly this block with the INTENT filled in, plus where the repo is, and nothing else. Past that the diff is the only signal it gets about where to look. Naming what you changed, what you fixed, or what you suspect tells it what counts, and it will find that and stop looking.
 
+Spawn the review in the background and carry on. The spawn is not what blocks you — waiting on the result is, and while you wait your owner cannot reach you: a long review silently closes the conversation for as long as it runs. Collect the verdict when it arrives.
+
   INTENT: <what the diff sets out to do. State the aim flatly, as a spec would: no reason it is worth doing, no defence of the approach, no account of what it replaces, no history of what was already tried.>
 
 Judge that INTENT before anything else. If it gives a reason the change is worth doing, defends the approach, or accounts for what it replaces, stop there: report `MAJOR — the brief argues for the change`, `major=1 moderate=0 minor=0`, and review nothing. A reviewer handed a case for the change grades the case, and that is most of what stands between a review and a rubber stamp.
