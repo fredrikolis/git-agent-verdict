@@ -4,7 +4,7 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
-## [Unreleased]
+## [0.3.0] - 2026-08-05
 
 ### Added
 - `--check-min-version <version>`: a hook pins a floor in one line. Exit 1 names the install command.
@@ -66,7 +66,7 @@
 - A circular-rubric guard: staging a gate's own `--doc` refuses the commit.
 - An exemption for `Merge`, `Revert`, `fixup!` and `squash!`, the first two confirmed by git's state.
 
-[Unreleased]: https://github.com/fredrikolis/git-agent-verdict/compare/v0.2.0...HEAD
+[0.3.0]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.3.0
 [0.2.0]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.2.0
 [0.1.6]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.1.6
 [0.1.4]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.1.4
