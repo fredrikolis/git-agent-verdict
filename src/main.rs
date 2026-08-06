@@ -7,7 +7,8 @@ mod trailer;
 use std::process::ExitCode;
 
 const USAGE: &str = concat!(
-    "usage: git-agent-verdict <msg-file> <gate> [--per-file] --doc <path>... --path <pathspec>...\n",
+    "usage: git-agent-verdict <msg-file> <gate> [--per-file] [--simple] [--override-prompt <path>]\n",
+    "                         --doc <path>... --path <pathspec>...\n",
     "       git-agent-verdict --rubric-guard --doc <path>...\n\
        git-agent-verdict --reviewer-prompt <gate>"
 );
@@ -17,12 +18,20 @@ const GUARD_LABEL: &str = "rubric-guard";
 // Set while the hook is re-run to enumerate itself: every gate prints its declaration and exits instead of validating, so the doc list is read from the hook rather than retyped beside it.
 const LIST_ENV: &str = "GIT_AGENT_VERDICT_LIST";
 
+// How a gate briefs its reviewer: which ladder it grades against, whose template it reads. Held apart because --reviewer-prompt has one without a message, a pathspec or a decision.
+#[derive(Default)]
+pub struct Brief {
+    pub simple: bool,
+    pub prompt: Option<String>,
+}
+
 pub struct Invocation {
     pub msg_file: String,
     pub gate: String,
     pub per_file: bool,
     pub docs: Vec<String>,
     pub paths: Vec<String>,
+    pub brief: Brief,
 }
 
 // The preflight needs neither the message nor a gate, so it is a flag-only mode rather than a gate that ignores half its arguments.
@@ -30,6 +39,13 @@ enum Mode {
     Gate(Invocation),
     RubricGuard(Vec<String>),
     ReviewerPrompt(String),
+}
+
+// Same reason as a doc: the reviewer block promises absolute paths, and a mistyped override would otherwise fall back to the built-in template without saying so.
+fn canonical(path: &str) -> Result<String, String> {
+    std::fs::canonicalize(path)
+        .map(|p| p.to_string_lossy().into_owned())
+        .map_err(|e| format!("--override-prompt {path}: {e}"))
 }
 
 // Resolved once, here: the reviewer block promises absolute paths, and an unresolvable doc would silently exempt itself from the rubric guards.
@@ -48,6 +64,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Mode, String> {
     let mut positional = Vec::new();
     let (mut guard, mut per_file) = (false, false);
     let mut reviewer_prompt: Option<String> = None;
+    let mut brief = Brief::default();
     let (mut docs, mut paths) = (Vec::new(), Vec::new());
     let mut args = args;
     while let Some(arg) = args.next() {
@@ -55,6 +72,11 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Mode, String> {
             "--rubric-guard" => guard = true,
             "--reviewer-prompt" => {
                 reviewer_prompt = Some(args.next().ok_or("--reviewer-prompt needs a gate name")?)
+            }
+            "--simple" => brief.simple = true,
+            "--override-prompt" => {
+                let path = args.next().ok_or("--override-prompt needs a path")?;
+                brief.prompt = Some(canonical(&path)?);
             }
             "--per-file" => per_file = true,
             "--doc" => docs.push(args.next().ok_or("--doc needs a path")?),
@@ -64,9 +86,9 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Mode, String> {
         }
     }
     if let Some(gate) = reviewer_prompt {
-        if guard || per_file || !docs.is_empty() || !paths.is_empty() || !positional.is_empty() {
-            let detail =
-                "--reviewer-prompt takes a gate name only: its docs come from the commit-msg hook";
+        let gate_flags = per_file || brief.simple || brief.prompt.is_some();
+        if guard || gate_flags || !docs.is_empty() || !paths.is_empty() || !positional.is_empty() {
+            let detail = "--reviewer-prompt takes a gate name only: how the gate is briefed comes from the commit-msg hook";
             return Err(detail.to_string());
         }
         return Ok(Mode::ReviewerPrompt(gate));
@@ -76,9 +98,13 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Mode, String> {
         return Err("at least one --doc is required".to_string());
     }
     if guard {
-        if per_file || !paths.is_empty() || !positional.is_empty() {
-            let detail =
-                "--rubric-guard reads the index alone: no <msg-file>, <gate>, --path or --per-file";
+        if per_file
+            || brief.simple
+            || brief.prompt.is_some()
+            || !paths.is_empty()
+            || !positional.is_empty()
+        {
+            let detail = "--rubric-guard reads the index alone: it demands no review, so no <msg-file>, <gate>, --path, --per-file, --simple or --override-prompt";
             return Err(detail.to_string());
         }
         return Ok(Mode::RubricGuard(canonical_docs(docs)?));
@@ -98,6 +124,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Mode, String> {
         per_file,
         docs: canonical_docs(docs)?,
         paths,
+        brief,
     }))
 }
 
@@ -173,12 +200,22 @@ fn reviewer_prompt(want: &str) -> Result<bool, String> {
     for line in listing.lines() {
         let mut fields = line.split('\t');
         let Some(gate) = fields.next() else { continue };
-        let docs: Vec<String> = fields.map(str::to_string).collect();
+        let mut brief = Brief::default();
+        let mut docs = Vec::new();
+        for field in fields {
+            if let Some(doc) = field.strip_prefix("doc=") {
+                docs.push(doc.to_string());
+            } else if let Some(path) = field.strip_prefix("prompt=") {
+                brief.prompt = Some(path.to_string());
+            } else if field == "simple" {
+                brief.simple = true;
+            }
+        }
         if docs.is_empty() {
             continue;
         }
         if gate == want {
-            println!("{}", report::prompt(gate, &docs));
+            println!("{}", report::prompt(gate, &docs, &brief)?);
             return Ok(true);
         }
         declared.push(gate.to_string());
@@ -194,7 +231,16 @@ fn reviewer_prompt(want: &str) -> Result<bool, String> {
 
 fn check(inv: &Invocation) -> Result<bool, String> {
     if std::env::var_os(LIST_ENV).is_some() {
-        println!("{}\t{}", inv.gate, inv.docs.join("\t"));
+        // Named fields, so a gate that declares no override still lists its docs unambiguously.
+        let mut fields = vec![inv.gate.clone()];
+        if inv.brief.simple {
+            fields.push("simple".to_string());
+        }
+        if let Some(path) = &inv.brief.prompt {
+            fields.push(format!("prompt={path}"));
+        }
+        fields.extend(inv.docs.iter().map(|d| format!("doc={d}")));
+        println!("{}", fields.join("\t"));
         return Ok(true);
     }
     let rubrics = staged_rubrics(&inv.docs)?;
@@ -235,26 +281,27 @@ fn check(inv: &Invocation) -> Result<bool, String> {
         } else {
             "the message needs this trailer and has none"
         };
-        report::missing(inv, detail);
+        report::missing(inv, detail)?;
         return Ok(false);
     }
 
     if inv.per_file {
         let gaps = per_file_gaps(inv, &verdicts)?;
         if !gaps.is_empty() {
-            report::missing(inv, &format!("no trailer names: {}", gaps.join(", ")));
+            report::missing(inv, &format!("no trailer names: {}", gaps.join(", ")))?;
             return Ok(false);
         }
     }
 
     let major = verdicts.iter().map(|v| v.major).sum();
-    let moderate = verdicts.iter().map(|v| v.moderate).sum();
-    if verdicts.iter().any(trailer::Verdict::blocks) {
-        report::blocked(&inv.gate, major, moderate);
+    // A simple gate demands the review and records it; what the review found is the author's to act on, so no count of it is a blocker.
+    if !inv.brief.simple && verdicts.iter().any(trailer::Verdict::blocks) {
+        report::blocked(&inv.gate, major);
         return Ok(false);
     }
+    let moderate = verdicts.iter().map(|v| v.moderate).sum();
     let minor = verdicts.iter().map(|v| v.minor).sum();
-    report::attested(&inv.gate, verdicts.len(), minor);
+    report::attested(&inv.gate, verdicts.len(), (major, moderate, minor));
     Ok(true)
 }
 

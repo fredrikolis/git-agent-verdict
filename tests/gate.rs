@@ -1,94 +1,8 @@
-// Concern: the gate's observable contract — exit status and decision against a real repo | Non-concern: the trailer grammar, unit-tested in src/trailer.rs | IO: (temp repo, message) -> exit status
+// Concern: the gate's decision against a real repo — what passes, what is refused, what exits 2 | Non-concern: the reviewer block it prints (tests/brief.rs) | IO: (temp repo, message) -> exit status
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::atomic::{AtomicU32, Ordering};
+mod common;
 
-const BIN: &str = env!("CARGO_BIN_EXE_git-agent-verdict");
-static SEQ: AtomicU32 = AtomicU32::new(0);
-
-struct Repo {
-    dir: PathBuf,
-}
-
-fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .current_dir(dir)
-        .args(args)
-        .output()
-        .expect("git runs");
-    assert!(out.status.success(), "git {args:?}: {out:?}");
-}
-
-impl Repo {
-    fn new() -> Self {
-        let n = SEQ.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("gav-{}-{n}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("temp dir");
-        let dir = dir.canonicalize().expect("canonical temp dir");
-        git(&dir, &["init", "-q"]);
-        git(&dir, &["config", "user.email", "t@t"]);
-        git(&dir, &["config", "user.name", "t"]);
-        let repo = Repo { dir };
-        repo.write("rubric.md", "the standard");
-        repo.write("src.rs", "code");
-        repo
-    }
-
-    fn write(&self, name: &str, body: &str) {
-        std::fs::write(self.dir.join(name), body).expect("write");
-    }
-
-    fn stage(&self, paths: &[&str]) {
-        for p in paths {
-            git(&self.dir, &["add", p]);
-        }
-    }
-
-    fn run(&self, msg: &str, args: &[&str]) -> (i32, String) {
-        self.write("MSG", msg);
-        let out = Command::new(BIN)
-            .current_dir(&self.dir)
-            .arg("MSG")
-            .args(args)
-            .output()
-            .expect("binary runs");
-        let text = String::from_utf8_lossy(&out.stderr).into_owned();
-        (out.status.code().expect("exited"), text)
-    }
-
-    fn standards(&self, msg: &str) -> (i32, String) {
-        self.run(msg, &["standards", "--doc", "rubric.md", "--path", "."])
-    }
-
-    // The preflight takes no message file, so it cannot go through run().
-    fn guard(&self, args: &[&str]) -> (i32, String) {
-        let out = Command::new(BIN)
-            .current_dir(&self.dir)
-            .args(args)
-            .output()
-            .expect("binary runs");
-        let text = String::from_utf8_lossy(&out.stderr).into_owned();
-        (out.status.code().expect("exited"), text)
-    }
-
-    // Written beside the worktree, not in it: such a path can never appear in the index.
-    fn outside_doc(&self) -> PathBuf {
-        let path = self.dir.with_extension("outside.md");
-        std::fs::write(&path, "the standard").expect("write");
-        path
-    }
-}
-
-impl Drop for Repo {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
-        let _ = std::fs::remove_file(self.dir.with_extension("outside.md"));
-    }
-}
-
-const CLEAN: &str =
-    "subject\n\nbody\n\nReviewed-standards: reviewer=opus major=0 moderate=0 minor=2\n";
+use common::{Repo, BIN, CLEAN};
 
 #[test]
 fn an_attested_commit_passes() {
@@ -113,10 +27,37 @@ fn an_unattested_commit_fails_and_prints_the_prompt() {
 fn a_declared_blocker_fails() {
     let repo = Repo::new();
     repo.stage(&["src.rs"]);
-    let msg = "subject\n\nReviewed-standards: reviewer=opus major=0 moderate=1 minor=0\n";
+    let msg = "subject\n\nReviewed-standards: reviewer=opus major=1 moderate=0 minor=0\n";
     let (code, out) = repo.standards(msg);
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("DECLARED BLOCKER"), "{out}");
+}
+
+// The count records what the reviewer found. The MODERATEs were fixed without a second look, so what survives into the trailer is a record, not an outstanding defect.
+#[test]
+fn a_moderate_count_passes_and_is_reported() {
+    let repo = Repo::new();
+    repo.stage(&["src.rs"]);
+    let msg = "subject\n\nReviewed-standards: reviewer=opus major=0 moderate=2 minor=1\n";
+    let (code, out) = repo.standards(msg);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("moderate=2"), "{out}");
+}
+
+#[test]
+fn a_simple_gate_records_findings_without_blocking_on_them() {
+    let repo = Repo::new();
+    repo.stage(&["src.rs"]);
+    let args = ["look", "--simple", "--doc", "rubric.md", "--path", "."];
+    let msg = "subject\n\nReviewed-look: reviewer=opus major=3 moderate=2 minor=1\n";
+    let (code, out) = repo.run(msg, &args);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("major=3"), "{out}");
+
+    // Advisory about the findings, not about the review: the trailer itself is still demanded.
+    let (code, out) = repo.run("subject\n\nbody\n", &args);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("REVIEW GATE FAILED"), "{out}");
 }
 
 #[test]
@@ -172,7 +113,7 @@ fn the_preflight_refuses_a_staged_rubric_and_names_it() {
         "--doc",
         "later-rubric.md",
     ];
-    let (code, out) = repo.guard(&args);
+    let (code, out) = repo.bare(&args);
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("RUBRIC IS STAGED"), "{out}");
     assert!(out.contains("later-rubric.md"), "{out}");
@@ -184,7 +125,7 @@ fn the_preflight_refuses_a_staged_rubric_and_names_it() {
 fn the_preflight_passes_silently_when_no_rubric_is_staged() {
     let repo = Repo::new();
     repo.stage(&["src.rs"]);
-    let (code, out) = repo.guard(&["--rubric-guard", "--doc", "rubric.md"]);
+    let (code, out) = repo.bare(&["--rubric-guard", "--doc", "rubric.md"]);
     assert_eq!(code, 0, "{out}");
     assert!(out.is_empty(), "{out}");
 }
@@ -194,7 +135,7 @@ fn the_preflight_is_a_no_op_for_a_doc_outside_the_worktree() {
     let repo = Repo::new();
     repo.stage(&["src.rs", "rubric.md"]);
     let outside = repo.outside_doc();
-    let (code, out) = repo.guard(&["--rubric-guard", "--doc", outside.to_str().expect("utf-8")]);
+    let (code, out) = repo.bare(&["--rubric-guard", "--doc", outside.to_str().expect("utf-8")]);
     assert_eq!(code, 0, "{out}");
     assert!(out.is_empty(), "{out}");
 }
@@ -203,14 +144,22 @@ fn the_preflight_is_a_no_op_for_a_doc_outside_the_worktree() {
 fn the_preflight_rejects_arguments_its_mode_cannot_use() {
     let repo = Repo::new();
     repo.stage(&["src.rs", "rubric.md"]);
-    let bad: [&[&str]; 4] = [
+    let bad: [&[&str]; 6] = [
         &["--rubric-guard"],
         &["--rubric-guard", "--doc", "rubric.md", "--path", "."],
         &["--rubric-guard", "--doc", "rubric.md", "--per-file"],
+        &["--rubric-guard", "--doc", "rubric.md", "--simple"],
+        &[
+            "--rubric-guard",
+            "--doc",
+            "rubric.md",
+            "--override-prompt",
+            "rubric.md",
+        ],
         &["--rubric-guard", "MSG", "standards", "--doc", "rubric.md"],
     ];
     for args in bad {
-        let (code, out) = repo.guard(args);
+        let (code, out) = repo.bare(args);
         assert_eq!(code, 2, "{args:?}: {out}");
         assert!(out.contains("usage:"), "{args:?}: {out}");
     }
@@ -277,20 +226,6 @@ fn a_literal_path_naming_nothing_tracked_is_a_typo() {
 }
 
 #[test]
-fn the_prompt_demands_an_intent_and_says_how_to_judge_it() {
-    let repo = Repo::new();
-    repo.stage(&["src.rs"]);
-    let (code, out) = repo.standards("subject\n\nbody\n");
-    assert_eq!(code, 1, "{out}");
-    assert!(out.contains("INTENT:"), "{out}");
-    assert!(
-        out.contains("Judge that INTENT before anything else"),
-        "{out}"
-    );
-    assert!(out.contains("Scope is not your question"), "{out}");
-}
-
-#[test]
 fn version_and_help_are_info_flags_that_exit_clean() {
     for (flag, needle) in [("--version", "git-agent-verdict 0."), ("--help", "usage:")] {
         let out = std::process::Command::new(BIN)
@@ -317,61 +252,4 @@ fn an_agent_coauthor_line_is_dropped_but_a_human_one_is_kept() {
     assert!(!rewritten.contains("anthropic.com"), "{rewritten}");
     assert!(rewritten.contains("claude@example.com"), "{rewritten}");
     assert!(rewritten.contains("Reviewed-standards:"), "{rewritten}");
-}
-
-#[test]
-fn reviewer_prompt_reads_its_docs_from_the_hook() {
-    let repo = Repo::new();
-    // By absolute path, not by name: a name resolves from PATH, which passes on a box with the tool installed and fails in CI, where the only build is the one cargo just made.
-    repo.write(
-        "hook",
-        &format!("#!/bin/sh\nexec {BIN} \"$1\" standards --doc rubric.md --path .\n"),
-    );
-    let hooks = repo.dir.join("hooks");
-    std::fs::create_dir_all(&hooks).expect("hooks dir");
-    std::fs::rename(repo.dir.join("hook"), hooks.join("commit-msg")).expect("place hook");
-    git(&repo.dir, &["config", "core.hooksPath", "hooks"]);
-    let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
-    std::fs::set_permissions(hooks.join("commit-msg"), mode).expect("chmod");
-
-    let out = std::process::Command::new(BIN)
-        .current_dir(&repo.dir)
-        .args(["--reviewer-prompt", "standards"])
-        .output()
-        .expect("binary runs");
-    let text = String::from_utf8_lossy(&out.stdout).into_owned();
-    let err = String::from_utf8_lossy(&out.stderr).into_owned();
-    assert_eq!(out.status.code(), Some(0), "{err}");
-    assert!(text.contains("NEUTRAL REVIEW — gate: standards"), "{text}");
-    assert!(text.contains("INTENT:"), "{text}");
-    assert!(text.contains("rubric.md"), "{text}");
-
-    let out = std::process::Command::new(BIN)
-        .current_dir(&repo.dir)
-        .args(["--reviewer-prompt", "nope"])
-        .output()
-        .expect("binary runs");
-    let err = String::from_utf8_lossy(&out.stderr).into_owned();
-    assert_eq!(out.status.code(), Some(2), "{err}");
-    assert!(err.contains("it declares: standards"), "{err}");
-}
-
-#[test]
-fn reviewer_prompt_refuses_the_gate_mode_flags() {
-    let repo = Repo::new();
-    for extra in [
-        vec!["--path", "."],
-        vec!["--per-file"],
-        vec!["--doc", "rubric.md"],
-        vec!["MSG"],
-    ] {
-        let mut args = vec!["--reviewer-prompt", "standards"];
-        args.extend(extra.iter());
-        let out = std::process::Command::new(BIN)
-            .current_dir(&repo.dir)
-            .args(&args)
-            .output()
-            .expect("binary runs");
-        assert_eq!(out.status.code(), Some(2), "{args:?}");
-    }
 }

@@ -1,9 +1,11 @@
 // Concern: everything the tool prints — the skip line, each rejection, the reviewer block that remedies it | Non-concern: deciding whether a gate passed | IO: (gate, reason) -> stderr
 
 use crate::trailer::key_for;
-use crate::Invocation;
+use crate::{Brief, Invocation};
 
 const TEMPLATE: &str = include_str!("prompt.md");
+const LADDER: &str = include_str!("ladder.md");
+const LADDER_SIMPLE: &str = include_str!("ladder-simple.md");
 
 pub fn skipped(gate: &str, paths: &[String]) {
     eprintln!(
@@ -12,36 +14,64 @@ pub fn skipped(gate: &str, paths: &[String]) {
     );
 }
 
-pub fn prompt(gate: &str, docs: &[String]) -> String {
+// Only a built-in template carries an annotation line; an override is a repo's own file, and eating its first line would be a silent edit.
+fn built_in(text: &str) -> String {
+    text.lines().skip(1).collect::<Vec<_>>().join("\n")
+}
+
+pub fn prompt(gate: &str, docs: &[String], brief: &Brief) -> Result<String, String> {
+    let template = match &brief.prompt {
+        Some(path) => {
+            std::fs::read_to_string(path).map_err(|e| format!("--override-prompt {path}: {e}"))?
+        }
+        None => built_in(TEMPLATE),
+    };
     let docs = docs
         .iter()
         .map(|d| format!("  {d}"))
         .collect::<Vec<_>>()
         .join("\n");
-    TEMPLATE
-        .lines()
-        .skip(1)
-        .collect::<Vec<_>>()
-        .join("\n")
+    let ladder = built_in(if brief.simple { LADDER_SIMPLE } else { LADDER });
+    Ok(template
         .replace("{{gate}}", gate)
         .replace("{{docs}}", &docs)
+        .replace("{{ladder}}", &ladder))
 }
 
+// The zero is shown only where one is demanded: every other count is a slot for what the reviewer actually reported, and a literal 0 in the shape is an invitation to write one.
 fn shape(inv: &Invocation) -> String {
     let key = key_for(&inv.gate);
     let tail = if inv.per_file { " file=<path>" } else { "" };
-    format!("  {key}: reviewer=<id> major=0 moderate=0 minor=<n>{tail}")
+    let major = if inv.brief.simple { "<n>" } else { "0" };
+    format!("  {key}: reviewer=<id> major={major} moderate=<n> minor=<n>{tail}")
 }
 
-pub fn missing(inv: &Invocation, detail: &str) {
+// What the counts cost is the one thing an advisory gate states differently, so it is the one thing spelled out per mode.
+const EARNED: &str = "\
+Earned by a review you run yourself: spawn a reviewer in a fresh context, hand it the
+block below, fix every MODERATE it names, then write the counts it REPORTED into the
+trailer. Only major=0 passes; there is no re-review. Trailers must be the LAST paragraph.";
+
+const EARNED_SIMPLE: &str = "\
+Earned by a review you run yourself: spawn a reviewer in a fresh context, hand it the
+block below, then write the counts it reported into the trailer. This gate is advisory:
+nothing it finds blocks the commit. Trailers must be the LAST paragraph.";
+
+pub fn missing(inv: &Invocation, detail: &str) -> Result<(), String> {
     eprintln!("\ngit-agent-verdict: {}: REVIEW GATE FAILED\n", inv.gate);
     eprintln!("MISSING — {detail}\n");
     eprintln!("{}\n", shape(inv));
-    eprintln!("Earned by a review you run yourself: spawn a reviewer in a fresh context, hand it");
-    eprintln!("the block below, iterate `re-review` until it reports major=0 and moderate=0, then");
-    eprintln!("write its counts into the trailer. Trailers must be the LAST paragraph.\n");
+    eprintln!(
+        "{}\n",
+        if inv.brief.simple {
+            EARNED_SIMPLE
+        } else {
+            EARNED
+        }
+    );
     eprintln!("── FORWARD BELOW THIS LINE ──");
-    eprintln!("{}", prompt(&inv.gate, &inv.docs));
+    eprintln!("{}", prompt(&inv.gate, &inv.docs, &inv.brief)?);
+    Ok(())
 }
 
 fn refused(label: &str, judged_by: &str, rubrics: &[String]) {
@@ -62,13 +92,19 @@ pub fn preflight(rubrics: &[String]) {
     refused(crate::GUARD_LABEL, "a review in this hook", rubrics);
 }
 
-pub fn attested(gate: &str, count: usize, minor: u32) {
-    eprintln!("git-agent-verdict: {gate}: attested ({count} verdict(s), minor={minor})");
+// All three counts, because a passing commit now carries findings: only major= had to be zero.
+pub fn attested(gate: &str, count: usize, counts: (u32, u32, u32)) {
+    let (major, moderate, minor) = counts;
+    eprintln!(
+        "git-agent-verdict: {gate}: attested ({count} verdict(s), major={major} moderate={moderate} minor={minor})"
+    );
 }
 
-pub fn blocked(gate: &str, major: u32, moderate: u32) {
+pub fn blocked(gate: &str, major: u32) {
     eprintln!("\ngit-agent-verdict: {gate}: DECLARED BLOCKER");
-    eprintln!("  major={major} moderate={moderate} (both must be 0)");
+    eprintln!("  major={major} (must be 0)");
+    eprintln!("\nA MAJOR is not the author's to patch. The fix is re-planned by an agent that did");
+    eprintln!("not write the change, then implemented and reviewed afresh.");
 }
 
 pub fn malformed(gate: &str, detail: &str) {

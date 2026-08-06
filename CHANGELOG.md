@@ -5,6 +5,36 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- **A gate blocks on `major=` alone.** A MODERATE is now fixed without a second look, so the review
+  runs once and the count that reaches the trailer is a record of what the reviewer found rather
+  than a tally of what is left outstanding. The fix -> re-review loop it removes was most of what a
+  gate cost: a full second review to confirm fixes the same reviewer had already specified. MAJOR
+  still blocks, and still re-reviews nothing — the work is re-planned by an agent that did not write
+  it and comes back new. A commit attesting `major=0 moderate=2 minor=1` passes and says so.
+- MINOR is the author's discretion: fixed, or consciously left, recorded either way.
+- The reviewer is told to read for defects rather than re-run the work looking for them. Building
+  and probing is how a suspicion it already has gets confirmed before it is reported, not a sweep to
+  turn one up, which is most of how a review turned into an afternoon.
+- `attested` names all three counts, because a passing commit now carries findings.
+- The prompt's paragraphs are no longer hard-wrapped: the block is piped into a reviewer, where
+  fixed-column breaks are noise.
+
+### Added
+- `--simple` makes a gate advisory. The trailer is still demanded, so the review still happens and
+  its findings still land on the record, but no count blocks and the reviewer is briefed against a
+  ladder that says so. For a dimension worth a look and not worth a veto, which a repo otherwise
+  answers by not gating it at all.
+- `--override-prompt <path>` replaces the built-in reviewer block with a repo's own file, rendered
+  verbatim apart from `{{gate}}`, `{{docs}}` and `{{ladder}}`. Unlike a built-in template its first
+  line is content, never an annotation to strip. A path that does not resolve exits 2 rather than
+  falling back to the default in silence.
+- Both are declared on the gate's line in the hook, and `--reviewer-prompt <gate>` reads them back
+  from there with the docs, so the block it prints is the one that gate will judge by. Rejected
+  alongside `--reviewer-prompt` and `--rubric-guard`, neither of which briefs a reviewer.
+
 ## [0.1.6] - 2026-08-05
 
 ### Added

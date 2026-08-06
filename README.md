@@ -1,4 +1,4 @@
-<!-- Concern: what git-agent-verdict is, the trailer it verifies, and how to wire it into a repo | Non-concern: the reviews it attests (src/prompt.md owns the reviewer's brief) | IO: none -->
+<!-- Concern: what git-agent-verdict is, the trailer it verifies, and how to wire it into a repo | Non-concern: the reviews it attests (src/prompt.md and the ladders own the reviewer's brief) | IO: none -->
 # git-agent-verdict
 
 Verifies that a commit message carries an attested review verdict, and blocks on any declared
@@ -28,11 +28,11 @@ git-agent-verdict: my-code-review: REVIEW GATE FAILED
 
 MISSING — the message needs this trailer and has none
 
-  Reviewed-my-code-review: reviewer=<id> major=0 moderate=0 minor=<n>
+  Reviewed-my-code-review: reviewer=<id> major=0 moderate=<n> minor=<n>
 
-Earned by a review you run yourself: spawn a reviewer in a fresh context, hand it
-the block below, iterate `re-review` until it reports major=0 and moderate=0, then
-write its counts into the trailer. Trailers must be the LAST paragraph.
+Earned by a review you run yourself: spawn a reviewer in a fresh context, hand it the
+block below, fix every MODERATE it names, then write the counts it REPORTED into the
+trailer. Only major=0 passes; there is no re-review. Trailers must be the LAST paragraph.
 
 ── FORWARD BELOW THIS LINE ──
 NEUTRAL REVIEW — gate: my-code-review
@@ -44,14 +44,17 @@ repo is, and nothing else. Past that the diff is the only signal it gets about w
 
 The missing trailer comes first, then the prompt that earns it. Target and remedy in one turn.
 
-**2. The agent spawns a reviewer** in a fresh context, hands it that block with the `INTENT` filled
-in, and keeps the session id.
+**2. The agent spawns a reviewer** in a fresh context and hands it that block with the `INTENT`
+filled in.
 
 ```console
-$ git agent-verdict --reviewer-prompt my-code-review | claude -p --output-format json \
+$ git agent-verdict --reviewer-prompt my-code-review | claude -p \
     "INTENT: the commit-msg hook delegates verdict verification to an external CLI
              and keeps only the gate declarations."
-{"session_id":"a6f63e4b","result":"- KISS: none\n- SoC: MODERATE — install.sh declares\nthe roster twice and the gate holds neither\n...\nmajor=0 moderate=1 minor=3"}
+- KISS: none
+- SoC: MODERATE — install.sh declares the roster twice and the gate holds neither
+...
+major=0 moderate=1 minor=3
 ```
 
 `--reviewer-prompt` takes the gate name and nothing else: the docs come from the `commit-msg` hook,
@@ -62,16 +65,9 @@ resolves the same way it does at commit time.
 The `INTENT` is flat, and it is the only thing added. Naming what changed, what was fixed, or what
 the author suspects tells the reviewer what counts, and it will find that and stop looking.
 
-**3. The agent fixes the MODERATE, then resumes that same reviewer with one word.**
-
-```console
-$ claude -p --resume a6f63e4b "re-review"
-major=0 moderate=0 minor=3
-```
-
-Not a new reviewer, which would need re-briefing and would arrive with no memory of its own
-findings. Not a summary of what was fixed, which would steer the second look exactly the way the
-first was kept from being steered.
+**3. The agent fixes the MODERATE and writes down what the reviewer reported.** Not what is left
+after the fix: the trailer is a record of the review, and `moderate=1` is what this review found.
+The reviewer is not asked again — one look is all a gate buys, and the counts stand as it left them.
 
 **4. Repeat per gate, in the hook's order, never in parallel.** A gate judging annotations must not
 run while the gate judging code is still changing them.
@@ -80,13 +76,13 @@ run while the gate judging code is still changing them.
 
 ```console
 $ git commit
-git-agent-verdict: my-code-review: attested (1 verdict(s), minor=3)
-git-agent-verdict: annotations: attested (5 verdict(s), minor=2)
+git-agent-verdict: my-code-review: attested (1 verdict(s), major=0 moderate=1 minor=3)
+git-agent-verdict: annotations: attested (5 verdict(s), major=0 moderate=0 minor=2)
 git-agent-verdict: prose: skipped (no staged file matches README.md, CONTRIBUTING.md)
 [main 4f2a1c8] Delegate the commit-msg review gate to git-agent-verdict
 ```
 
-Nothing in that loop was configured. `claude -p` is one runtime; the gate never sees the reviewer,
+Nothing in that pass was configured. `claude -p` is one runtime; the gate never sees the reviewer,
 only the trailer it produces. The requirement was printed at the moment it was wanted, which is what
 keeps the process out of the agent's briefing and out of the repo's docs.
 
@@ -99,7 +95,7 @@ The hook implemented verdict-checking itself in 267 lines of bash, duplicated in
 two sibling repos with three distinct md5s between them. That mechanism is now an
 external CLI, and the hook keeps only the gate declarations.
 
-Reviewed-my-code-review: reviewer=claude-opus-5 major=0 moderate=0 minor=3
+Reviewed-my-code-review: reviewer=claude-opus-5 major=0 moderate=1 minor=3
 Reviewed-annotations: reviewer=claude-opus-5 major=0 moderate=0 minor=1 file=src/gate.rs
 Reviewed-annotations: reviewer=claude-opus-5 major=0 moderate=0 minor=0 file=src/trailer.rs
 Reviewed-prose: reviewer=claude-opus-5 major=0 moderate=0 minor=0
@@ -107,7 +103,8 @@ Reviewed-prose: reviewer=claude-opus-5 major=0 moderate=0 minor=0
 
 Subject, body, then the trailers as the last paragraph. One per gate, plus one per file where the
 gate is `--per-file`. The counts are the verdict, and they are on the record with a name against
-them.
+them. `moderate=1` is not an outstanding defect: it was fixed, and the count records that the
+review found it.
 
 ## Trust model
 
@@ -134,15 +131,19 @@ precisely because the writer is an LLM.
 ## Usage
 
 ```
-git-agent-verdict <msg-file> <gate> [--per-file] --doc <path>... --path <pathspec>...
+git-agent-verdict <msg-file> <gate> [--per-file] [--simple] [--override-prompt <path>]
+                  --doc <path>... --path <pathspec>...
 git-agent-verdict --rubric-guard --doc <path>...
+git-agent-verdict --reviewer-prompt <gate>
 ```
 
 Installs as `git agent-verdict`. Every list is a repeated singular flag. No variadic can absorb the
 token meant for its neighbour, which would otherwise leave a gate silently skipped.
 
 The second form is the rubric preflight, described below. It reads the index alone, so it takes
-neither a message file nor a gate.
+neither a message file nor a gate. The third prints a gate's reviewer block on stdout without
+failing anything first, and takes the gate name only: everything about how that gate is briefed —
+its docs, its ladder, its template — is read back out of the hook that declares it.
 
 `--path` goes straight to `git diff --cached`, so git's pathspec syntax comes free. No staged file
 matching it means the gate is skipped, and the tool says so: a mis-scoped pathspec otherwise looks
@@ -151,6 +152,16 @@ identical to a passing commit. A literal `--path` naming nothing git tracks is a
 `--per-file` demands one trailer per staged file, deletions excluded, with the list taken from git
 rather than from the author. An author-supplied list decides what gets looked at, and that is where a missed file hides.
 It is the one check the author cannot fake by scoping.
+
+`--simple` makes the gate advisory. It still demands the trailer, so the review still has to happen
+and its findings still land on the record — but no count blocks, and the reviewer is briefed to say
+so. For a dimension worth a look and not worth a veto, which is otherwise the case a repo answers
+by not gating it at all.
+
+`--override-prompt <path>` replaces the built-in reviewer block with a file of the repo's own,
+rendered verbatim apart from `{{gate}}`, `{{docs}}` and `{{ladder}}`. The default is what stops the
+brief becoming a per-repo file that drifts, so reach for this when a repo's review genuinely is not
+the default one — not to reword it.
 
 Auto-generated messages (`Merge`, `Revert`, `fixup!`, `squash!`) carry no review and pass. `Merge`
 and `Revert` are trusted only when git's own in-progress state confirms them.
@@ -162,25 +173,32 @@ Exit status: 0 pass or skip, 1 gate failed, 2 usage or git error.
 Three rungs, graded by what is wrong, not by what the fix costs:
 
 - **MAJOR**: the work is wrong, or carries a severe flaw. Not the author's to patch: the fix is
-  re-planned by an agent that did not write it, then implemented and reviewed afresh.
-- **MODERATE**: the outcome is right, the execution is not. The author fixes it, and the review
-  runs again.
-- **MINOR**: fixable without another look. Never blocks; required, so a real nit has a home instead
-  of being inflated into a blocker.
+  re-planned by an agent that did not write it, then implemented and reviewed afresh. The only rung
+  that blocks.
+- **MODERATE**: the outcome is right, the execution is not. The author fixes it and does not go back
+  for a second opinion on the fix.
+- **MINOR**: the author's discretion — fixed, or consciously left. Recorded either way.
 
-Iterate fix -> re-review until MAJOR and MODERATE are both zero. That terminates cleanly because
-both blocking buckets mean the same thing: there is work the reviewer has not judged yet. When
-there is none left, the loop is over.
+**The review runs once.** Only `major=0` is demanded, so the counts on a passing commit are what the
+reviewer found, not what survived it. `moderate=2` is a commit whose two MODERATEs were fixed, and
+the trailer says a review happened and what it saw. That is what terminates: there is no round two
+to converge in.
 
 A review-and-fix loop fails in two directions, and the band between them is narrow. Too tight and
-nothing ever settles: every nit blocks, so no round converges. Too loose and nothing is caught: the
-reviewer rubber-stamps.
+nothing ever settles: every nit blocks, so no round comes back clean. Too loose and nothing is
+caught: the reviewer rubber-stamps. The loop itself was most of the cost — a full second review to
+confirm fixes the same reviewer had already specified — and MODERATE is what buys it away: real
+enough to have to fix, small enough that the fix does not need looking at. MAJOR is the one case
+where another review is genuinely cheaper than the alternative, and even it re-reviews nothing: the
+work is re-planned by an agent that did not write it, and comes back new.
 
-**MINOR is what makes zero-zero reachable.** A finding can be recorded without restarting the review,
-so nothing is suppressed and no reviewer is asked to pretend the code is clean. Findings are
-declassified, never hidden, which keeps the pressure on the code rather than on the report. The
-loop ends when the reviewer has seen everything that matters, not when it runs out of things to
-say.
+**MINOR is what keeps the count honest.** A finding can be recorded without obliging anyone to act
+on it, so nothing is suppressed and no reviewer is asked to pretend the code is clean. Findings are
+declassified, never hidden, which keeps the pressure on the code rather than on the report.
+
+**`--simple` is the rung below the ladder.** A gate whose findings are worth reading and not worth
+blocking on: the review is still demanded and still recorded, and the reviewer is told plainly that
+nothing it reports blocks, so it grades rather than negotiates.
 
 **The brief carries one thing: intent.** What the change set out to do, stated flatly, as a spec
 would state it: no reason it is worth doing, no defence of the approach, no account of what it
@@ -191,9 +209,9 @@ between a review and a rubber stamp.
 neither the issue nor the case for the change. A scope observation comes back as one MINOR line,
 never as grounds to re-plan.
 
-A severity, not a score. It drives the weak dimension to zero directly, where a number lets it hide
-behind strong ones and invites argument that cannot change the outcome. Two shapes tried before
-this one, both of which never settled:
+A severity, not a score. It says what is wrong and what that costs, where a number lets a weak
+dimension hide behind strong ones and invites argument that cannot change the outcome. Two shapes
+tried before this one, both of which never settled:
 
 | What we asked for | What we got |
 |---|---|
@@ -208,16 +226,25 @@ set -euo pipefail
 git agent-verdict --rubric-guard \
   --doc docs/repo-standards.md --doc docs/annotation-guide.md --doc docs/communication-style.md
 git agent-verdict "$1" standards   --doc docs/repo-standards.md --path .
-git agent-verdict "$1" annotations --per-file --doc docs/annotation-guide.md --path .
-git agent-verdict "$1" prose       --doc docs/communication-style.md --path README.md
+git agent-verdict "$1" annotations --per-file --simple --doc docs/annotation-guide.md --path .
+git agent-verdict "$1" prose       --simple --doc docs/communication-style.md --path README.md
 ```
 
 Line order is review order. `set -e` stops at the first unattested gate on purpose: a later gate
 must never be judged against content an earlier one is still changing.
 
+Each line is the whole declaration of its gate. `--simple` and `--override-prompt` live here beside
+the docs rather than in a config file, so `--reviewer-prompt <gate>` can hand back exactly the brief
+that gate will judge by, read from the one place that states it.
+
+Annotations and prose are `--simple` above, and that is the usual shape: one gate holds the bar the
+work has to clear, and the rest report. A repo that blocks on every dimension it cares about spends
+its review budget on the ones that were never going to sink the change.
+
 When a trailer is missing the tool prints it first, then the reviewer prompt that earns it, so an
-agent has the target and the remedy in one turn. The other failures name what is wrong and stop. The prompt is embedded in the binary, which is what
-stops it becoming a per-repo file that drifts.
+agent has the target and the remedy in one turn. The other failures name what is wrong and stop. The
+prompt is embedded in the binary, which is what stops it becoming a per-repo file that drifts —
+`--override-prompt` is the deliberate exception, and costs a repo that file.
 
 ## The one edit it makes
 

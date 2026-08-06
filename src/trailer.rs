@@ -8,8 +8,9 @@ pub struct Verdict {
 }
 
 impl Verdict {
+    // major= alone. A MODERATE is fixed without a second look, so its count records what the reviewer found, not what is left outstanding — blocking on it would demand a re-review that no longer happens.
     pub fn blocks(&self) -> bool {
-        self.major > 0 || self.moderate > 0
+        self.major > 0
     }
 }
 
@@ -112,6 +113,13 @@ mod tests {
     fn a_declared_blocker_blocks() {
         let v = one("Reviewed-standards: reviewer=opus major=1 moderate=0 minor=0").unwrap();
         assert!(v[0].blocks());
+    }
+
+    #[test]
+    fn a_moderate_is_reported_but_does_not_block() {
+        let v = one("Reviewed-standards: reviewer=opus major=0 moderate=2 minor=0").unwrap();
+        assert!(!v[0].blocks());
+        assert_eq!(v[0].moderate, 2);
     }
 
     #[test]
