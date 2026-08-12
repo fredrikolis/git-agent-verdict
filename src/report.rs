@@ -173,11 +173,20 @@ pub fn malformed(gate: &str, detail: &str) {
     eprintln!("\ngit-agent-verdict: {gate}: MALFORMED TRAILER\n  {detail}");
 }
 
-pub fn reviewing(gate: &str, reviewer: &str) {
-    eprintln!("git-agent-verdict: {gate}: reviewing with {reviewer}…");
+pub fn reviewing(gate: &str) {
+    eprintln!("git-agent-verdict: {gate}: reviewing…");
 }
 
-pub fn reviewed(gate: &str, verdicts: &[Verdict], blocked: bool, next: Option<&str>) {
+pub fn reviewed(
+    gate: &str,
+    verdicts: &[Verdict],
+    blocked: bool,
+    next: Option<&str>,
+    findings: &str,
+) {
+    if !findings.is_empty() {
+        eprintln!("\n{findings}");
+    }
     eprintln!("\ngit-agent-verdict: {gate}: {}\n", summarize(verdicts));
     if blocked {
         eprintln!(

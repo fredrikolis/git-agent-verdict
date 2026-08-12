@@ -89,6 +89,17 @@ fn counts_from(fields: &str, simple: bool) -> Result<Counts, String> {
     }
 }
 
+// Everything the reviewer said that was not its verdict line. The counts say how much was found; only this says what, and an author told to address a finding it cannot read has been told nothing.
+pub fn findings(output: &str) -> String {
+    output
+        .lines()
+        .filter(|l| !l.trim().starts_with(MARKER))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
+}
+
 // The reviewer's numbers are read here and never retyped by the author: that is the whole reason the tool runs the review rather than handing out a brief.
 pub fn verdicts(output: &str, simple: bool) -> Result<Vec<Verdict>, String> {
     let mut verdicts = Vec::new();

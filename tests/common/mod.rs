@@ -61,9 +61,12 @@ impl Repo {
         }
     }
 
+    // Sealed off from the host's own git config: a test that inherited `agent-verdict.runner` would call the real reviewer, cost real money, and pass for the wrong reason.
     pub fn capture(&self, args: &[&str]) -> Run {
         let out = Command::new(BIN)
             .current_dir(&self.dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .args(args)
             .output()
             .expect("binary runs");

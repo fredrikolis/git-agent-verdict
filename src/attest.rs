@@ -43,13 +43,13 @@ fn review(
     declaration: &Declaration,
     runner: &crate::runner::Runner,
     intent: &str,
-) -> Result<Vec<Verdict>, String> {
+) -> Result<(Vec<Verdict>, String), String> {
     let files = git::staged_existing(&declaration.paths)?;
     let brief = report::prompt(declaration, Some(intent), &files)?;
-    report::reviewing(&declaration.gate, &runner.cmd);
+    report::reviewing(&declaration.gate);
     let output = crate::runner::invoke(runner, &brief)?;
     let verdicts = crate::runner::verdicts(&output, declaration.brief.simple)?;
-    Ok(verdicts)
+    Ok((verdicts, crate::runner::findings(&output)))
 }
 
 fn trailers(hook: &Hook, steps: &[state::Step]) -> Result<Vec<String>, String> {
@@ -102,11 +102,17 @@ pub fn run(intent: &str) -> Result<bool, String> {
         return land(&hook, &steps, intent);
     };
     let runner = crate::runner::configured()?;
-    let verdicts = review(declaration, &runner, intent)?;
+    let (verdicts, findings) = review(declaration, &runner, intent)?;
     let blocked = !declaration.brief.simple && verdicts.iter().any(Verdict::blocks);
     state::record(&declaration.gate, &verdicts, blocked)?;
     let remaining = next(&hook, &state::progress()?)?.map(|d| d.gate.clone());
-    report::reviewed(&declaration.gate, &verdicts, blocked, remaining.as_deref());
+    report::reviewed(
+        &declaration.gate,
+        &verdicts,
+        blocked,
+        remaining.as_deref(),
+        &findings,
+    );
     Ok(!blocked)
 }
 

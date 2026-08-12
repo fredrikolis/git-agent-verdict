@@ -156,6 +156,21 @@ fn a_verdict_line_missing_a_required_field_is_refused() {
     }
 }
 
+// The counts say how much; only the report says what. An author told to address a finding it cannot read has been told nothing.
+#[test]
+fn what_the_reviewer_said_reaches_the_author() {
+    let repo = Repo::new();
+    let spoken = format!("MODERATE - the lede repeats the heading\\n{CLEAN}");
+    repo.declare(&spoken, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    let run = repo.attest(AIM);
+    assert!(
+        run.err.contains("the lede repeats the heading"),
+        "{}",
+        run.err
+    );
+}
+
 #[test]
 fn a_reviewer_that_reports_no_verdict_line_is_an_error_not_a_pass() {
     let repo = Repo::new();

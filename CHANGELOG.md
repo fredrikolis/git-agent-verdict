@@ -15,6 +15,8 @@
 - `reset <reason>`: clears this commit's recorded reviews. The count and reasons reach the message.
 - `token=` on every trailer: the gate resolves it and rejects counts that contradict the review.
 - The reviewer's brief closes with a `VERDICT:` line, which is where the counts are read from.
+- Everything else the reviewer said reaches the author: the counts say how much was found, and
+  only the report says what.
 - `VERDICT: refused` — the reviewer's answer to a brief that argues. It blocks on an advisory gate
   too, where the old guard's `major=1` could not.
 
