@@ -76,6 +76,41 @@ pub fn hook_path() -> Result<String, String> {
     Err(format!("no commit-msg hook at {path}"))
 }
 
+// Read through git so the whole precedence ladder applies: --global is the machine's default and --local overrides it per clone, neither of which a repo can commit for its maintainers.
+pub fn config(key: &str) -> Option<String> {
+    let out = run(&["config", "--get", key]).ok()?;
+    let value = String::from_utf8_lossy(&out).trim().to_string();
+    Some(value).filter(|v| !v.is_empty())
+}
+
+// Resolved through git so a worktree or a submodule lands in its own git dir rather than the superproject's.
+pub fn git_path(relative: &str) -> Result<std::path::PathBuf, String> {
+    let out = run(&["rev-parse", "--git-path", relative])?;
+    let path = String::from_utf8_lossy(&out).trim().to_string();
+    std::path::Path::new(&path)
+        .canonicalize()
+        .or_else(|_| std::env::current_dir().map(|cwd| cwd.join(&path)))
+        .map_err(|e| format!("cannot resolve {path}: {e}"))
+}
+
+// The commit under review does not exist yet, so state is keyed on what it will be committed onto. An unborn HEAD has no sha and gets a name no sha can collide with.
+pub fn head_sha() -> String {
+    match run(&["rev-parse", "HEAD"]) {
+        Ok(out) => String::from_utf8_lossy(&out).trim().to_string(),
+        Err(_) => "unborn".to_string(),
+    }
+}
+
+// Written through a file rather than -m so the message reaches git byte for byte, and committed with hooks live: the gate then verifies this message like any other.
+pub fn commit(message: &str) -> Result<String, String> {
+    let path = git_path("AGENT_VERDICT_MSG")?;
+    std::fs::write(&path, message).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    let file = path.to_string_lossy().into_owned();
+    let out = run(&["commit", "-F", &file]);
+    let _ = std::fs::remove_file(&path);
+    Ok(String::from_utf8_lossy(&out?).into_owned())
+}
+
 // Confirmed from git's own state, so a hand-typed subject cannot forge the exemption.
 pub fn in_progress(marker: &str) -> bool {
     let Ok(out) = run(&["rev-parse", "--git-path", marker]) else {

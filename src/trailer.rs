@@ -1,16 +1,32 @@
 // Concern: the verdict trailer's grammar — its key, its fields, what makes one blocking | Non-concern: obtaining the trailer block, or reporting a rejection | IO: (gate, block) -> verdicts
 
+// One shape per kind of gate: a blocking gate grades what it finds, an advisory one only counts it, and no trailer may carry both.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Counts {
+    Graded {
+        major: u32,
+        moderate: u32,
+        minor: u32,
+    },
+    Advisory {
+        findings: u32,
+    },
+}
+
+// The session is evidence, not a claim: it names a transcript on one machine, so it is kept in the diary beside the counts and never published into a message.
+#[derive(Clone)]
 pub struct Verdict {
-    pub major: u32,
-    pub moderate: u32,
-    pub minor: u32,
-    pub file: Option<String>,
+    pub reviewer: String,
+    pub counts: Counts,
+    pub token: String,
+    pub resets: u32,
+    pub session: String,
 }
 
 impl Verdict {
     // major= alone. A MODERATE is fixed without a second look, so its count records what the reviewer found, not what is left outstanding — blocking on it would demand a re-review that no longer happens.
     pub fn blocks(&self) -> bool {
-        self.major > 0
+        matches!(self.counts, Counts::Graded { major, .. } if major > 0)
     }
 }
 
@@ -18,53 +34,95 @@ pub fn key_for(gate: &str) -> String {
     format!("Reviewed-{gate}")
 }
 
-// `file=` is terminal so a path may contain spaces; every other field is a whitespace-free token.
-fn parse_value(value: &str) -> Result<Verdict, String> {
-    let (fields, file) = match value.split_once("file=") {
-        Some((head, path)) => (head, Some(path.trim().to_string())),
-        None => (value, None),
-    };
-    if file.as_deref().is_some_and(|p| p.contains("major=")) {
-        return Err("the counts must come before file=, which runs to end of line".to_string());
-    }
-    let mut reviewer = None;
-    let mut counts: [Option<u32>; 3] = [None; 3];
-    for field in fields.split_whitespace() {
-        let (name, raw) = field
-            .split_once('=')
-            .ok_or_else(|| format!("field '{field}' is not name=value"))?;
-        let slot = match name {
-            "reviewer" => 3,
-            "major" => 0,
-            "moderate" => 1,
-            "minor" => 2,
-            _ => return Err(format!("unknown field '{name}'")),
-        };
-        // Last-wins would let `major=1 major=0` bury a declared blocker.
-        if slot == 3 && reviewer.is_some() || slot < 3 && counts[slot].is_some() {
-            return Err(format!("{name}= is given more than once"));
-        }
-        if slot == 3 {
-            reviewer = Some(raw.to_string());
-            continue;
-        }
-        counts[slot] = Some(
-            raw.parse()
-                .map_err(|_| format!("{name}={raw} is not a number"))?,
-        );
-    }
-    if reviewer.is_none_or(|r| r.is_empty()) {
-        return Err("no reviewer= named".to_string());
-    }
-    match counts {
-        [Some(major), Some(moderate), Some(minor)] => Ok(Verdict {
+fn counts_from(slots: [Option<u32>; 4]) -> Result<Counts, String> {
+    match slots {
+        [Some(major), Some(moderate), Some(minor), None] => Ok(Counts::Graded {
             major,
             moderate,
             minor,
-            file,
         }),
-        _ => Err("major=, moderate= and minor= are all required".to_string()),
+        [None, None, None, Some(findings)] => Ok(Counts::Advisory { findings }),
+        [None, None, None, None] => {
+            Err("no counts: major=/moderate=/minor=, or findings=".to_string())
+        }
+        _ => Err(
+            "counts are either major=, moderate= and minor= together, or findings= alone"
+                .to_string(),
+        ),
     }
+}
+
+fn slot_of(name: &str) -> Option<usize> {
+    match name {
+        "major" => Some(0),
+        "moderate" => Some(1),
+        "minor" => Some(2),
+        "findings" => Some(3),
+        "resets" => Some(4),
+        _ => None,
+    }
+}
+
+struct Fields {
+    reviewer: Option<String>,
+    token: Option<String>,
+    numbers: [Option<u32>; 5],
+}
+
+fn read_field(f: &mut Fields, field: &str) -> Result<(), String> {
+    let (name, raw) = field
+        .split_once('=')
+        .ok_or_else(|| format!("field '{field}' is not name=value"))?;
+    let taken = match name {
+        "reviewer" => f.reviewer.is_some(),
+        "token" => f.token.is_some(),
+        other => slot_of(other)
+            .map(|s| f.numbers[s].is_some())
+            .unwrap_or(false),
+    };
+    // Last-wins would let `major=1 major=0` bury a declared blocker.
+    if taken {
+        return Err(format!("{name}= is given more than once"));
+    }
+    match name {
+        "reviewer" => f.reviewer = Some(raw.to_string()),
+        "token" => f.token = Some(raw.to_string()),
+        other => {
+            let slot = slot_of(other).ok_or_else(|| format!("unknown field '{other}'"))?;
+            let value = raw
+                .parse()
+                .map_err(|_| format!("{name}={raw} is not a number"))?;
+            f.numbers[slot] = Some(value);
+        }
+    }
+    Ok(())
+}
+
+fn parse_value(value: &str) -> Result<Verdict, String> {
+    let mut fields = Fields {
+        reviewer: None,
+        token: None,
+        numbers: [None; 5],
+    };
+    for field in value.split_whitespace() {
+        read_field(&mut fields, field)?;
+    }
+    let reviewer = fields
+        .reviewer
+        .filter(|r| !r.is_empty())
+        .ok_or("no reviewer= named")?;
+    let token = fields
+        .token
+        .filter(|t| !t.is_empty())
+        .ok_or("no token=: it is issued by `git agent-verdict attest`")?;
+    let [major, moderate, minor, findings, resets] = fields.numbers;
+    Ok(Verdict {
+        reviewer,
+        counts: counts_from([major, moderate, minor, findings])?,
+        token,
+        resets: resets.unwrap_or(0),
+        session: String::new(),
+    })
 }
 
 pub fn parse_for(gate: &str, block: &str) -> Result<Vec<Verdict>, String> {
@@ -77,6 +135,27 @@ pub fn parse_for(gate: &str, block: &str) -> Result<Vec<Verdict>, String> {
         verdicts.push(parse_value(value.trim()).map_err(|e| format!("{key}: {e}"))?);
     }
     Ok(verdicts)
+}
+
+// The one place the grammar is written rather than read, so `attest` hands back a line this file will accept.
+pub fn render(gate: &str, verdict: &Verdict) -> String {
+    let counts = match verdict.counts {
+        Counts::Graded {
+            major,
+            moderate,
+            minor,
+        } => format!("major={major} moderate={moderate} minor={minor}"),
+        Counts::Advisory { findings } => format!("findings={findings}"),
+    };
+    let resets = match verdict.resets {
+        0 => String::new(),
+        n => format!(" resets={n}"),
+    };
+    let key = key_for(gate);
+    format!(
+        "{key}: reviewer={} {counts} token={}{resets}",
+        verdict.reviewer, verdict.token
+    )
 }
 
 // Matched on the address, not the name: a human co-author called Claude keeps their credit.
@@ -101,57 +180,29 @@ mod tests {
         parse_for("standards", block)
     }
 
+    // The edge cases the end-to-end gate tests cannot reach cheaply: everything else about the grammar is frozen there instead.
     #[test]
-    fn accepts_a_clean_verdict() {
-        let v = one("Reviewed-standards: reviewer=opus major=0 moderate=0 minor=3").unwrap();
-        assert_eq!(v.len(), 1);
-        assert!(!v[0].blocks());
-        assert_eq!(v[0].minor, 3);
+    fn a_repeated_count_cannot_bury_a_blocker() {
+        let line = "Reviewed-standards: reviewer=opus major=1 major=0 moderate=0 minor=0 token=ab";
+        assert!(one(line).is_err());
     }
 
     #[test]
-    fn a_declared_blocker_blocks() {
-        let v = one("Reviewed-standards: reviewer=opus major=1 moderate=0 minor=0").unwrap();
-        assert!(v[0].blocks());
-    }
-
-    #[test]
-    fn a_moderate_is_reported_but_does_not_block() {
-        let v = one("Reviewed-standards: reviewer=opus major=0 moderate=2 minor=0").unwrap();
-        assert!(!v[0].blocks());
-        assert_eq!(v[0].moderate, 2);
-    }
-
-    #[test]
-    fn a_path_may_contain_spaces_because_file_is_terminal() {
-        let v = one("Reviewed-standards: reviewer=opus major=0 moderate=0 minor=0 file=my file.rs")
-            .unwrap();
-        assert_eq!(v[0].file.as_deref(), Some("my file.rs"));
-    }
-
-    #[test]
-    fn a_missing_count_is_rejected() {
-        assert!(one("Reviewed-standards: reviewer=opus major=0 minor=0").is_err());
-    }
-
-    #[test]
-    fn an_unnamed_reviewer_is_rejected() {
-        assert!(one("Reviewed-standards: major=0 moderate=0 minor=0").is_err());
+    fn the_two_count_shapes_cannot_be_mixed() {
+        let line =
+            "Reviewed-standards: reviewer=opus major=0 moderate=0 minor=0 findings=2 token=ab";
+        assert!(one(line).is_err());
     }
 
     #[test]
     fn another_gates_trailer_is_not_this_gates() {
-        assert!(
-            one("Reviewed-prose: reviewer=opus major=0 moderate=0 minor=0")
-                .unwrap()
-                .is_empty()
-        );
+        let line = "Reviewed-prose: reviewer=opus major=0 moderate=0 minor=0 token=ab";
+        assert!(one(line).unwrap().is_empty());
     }
 
     #[test]
     fn a_trailer_outside_the_trailing_paragraph_is_detected() {
-        let raw =
-            "subject\n\nReviewed-standards: reviewer=opus major=0 moderate=0 minor=0\n\nbody\n";
+        let raw = "subject\n\nReviewed-standards: reviewer=opus major=0 moderate=0 minor=0 token=ab\n\nbody\n";
         assert!(present_but_unparsed("standards", raw, ""));
     }
 }

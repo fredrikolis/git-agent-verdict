@@ -4,6 +4,42 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [0.4.0] - 2026-08-12
+
+### Added
+- `attest --intent <line>`: the tool runs the review itself. One gate per run, in declaration order;
+  it records what the reviewer reported and the last run commits. Nothing is handed out to forward.
+- `agent-verdict.runner` in git config: the command that reviews. `--global` is the host default,
+  `--local` overrides per clone, and neither is committed — a repo cannot pick an agent for its
+  maintainers.
+- `reset <reason>`: clears this commit's recorded reviews. The count and reasons reach the message.
+- `token=` on every trailer: the gate resolves it and rejects counts that contradict the review.
+- The reviewer's brief closes with a `VERDICT:` line, which is where the counts are read from.
+- `VERDICT: refused` — the reviewer's answer to a brief that argues. It blocks on an advisory gate
+  too, where the old guard's `major=1` could not.
+
+### Changed
+- `--intent` is one line of at most 300 characters, and becomes the commit's subject. Over the limit
+  names the remedy: an aim that will not fit is more than one change, so commit them separately.
+- `--simple` gates report `findings=<n>` and are briefed by their own template: an advisory review
+  no longer grades. Previously the ladder swapped but the grading burden did not.
+- MAJOR states what is wrong and blocks; the remedy is the author's, not the reviewer's to prescribe.
+- Review state lives in `.git/agent-verdict/<head>/`, dropped when HEAD moves.
+- `--reviewer-prompt <gate>` is for reading a brief, not for feeding one to a reviewer.
+- Every brief now names the staged files in scope, and says there are no others. Scoping was never
+  something the reviewer was told before — `--path` bounded the gate, and the brief said nothing.
+- The reviewer MUST report `reviewer=` and `session=` on the VERDICT line — the brief states both,
+  so an omission is a broken contract and exits 2 rather than being defaulted to a guess.
+  `reviewer=` reaches the trailer; `session=` stays in the diary, because a transcript id is local
+  evidence, not a public claim, and a pushed commit cannot be unpublished.
+
+### Removed
+- `--per-file`, and `file=` from the trailer grammar. One verdict per gate. It demanded one trailer
+  per staged file so none could be silently skipped; what it cost was a trailer per file on every
+  message, and what replaces it is the brief naming the files in scope.
+- The `── FORWARD BELOW THIS LINE ──` block and the ladder files. The reviewer is briefed by the
+  tool, so there is nothing for an author to forward and no dispatcher preamble to forward it with.
+
 ## [0.3.0] - 2026-08-05
 
 ### Added
@@ -66,6 +102,7 @@
 - A circular-rubric guard: staging a gate's own `--doc` refuses the commit.
 - An exemption for `Merge`, `Revert`, `fixup!` and `squash!`, the first two confirmed by git's state.
 
+[0.4.0]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.4.0
 [0.3.0]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.3.0
 [0.2.0]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.2.0
 [0.1.6]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.1.6

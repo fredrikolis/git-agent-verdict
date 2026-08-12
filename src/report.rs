@@ -1,11 +1,13 @@
-// Concern: everything the tool prints — the skip line, each rejection, the reviewer block that remedies it | Non-concern: deciding whether a gate passed | IO: (gate, reason) -> stderr
+// Concern: everything the tool prints — the skip line, each rejection, and what `attest` narrates as it runs | Non-concern: deciding whether a gate passed | IO: (gate, reason) -> stderr
 
-use crate::trailer::key_for;
-use crate::{Brief, Invocation};
+use crate::cli::Invocation;
+use crate::declarations::Declaration;
+use crate::runner::{MARKER, REFUSED};
+use crate::trailer::{key_for, Counts, Verdict};
 
 const TEMPLATE: &str = include_str!("prompt.md");
-const LADDER: &str = include_str!("ladder.md");
-const LADDER_SIMPLE: &str = include_str!("ladder-simple.md");
+const TEMPLATE_SIMPLE: &str = include_str!("prompt-simple.md");
+const PLACEHOLDER: &str = "<the aim of the change, stated flatly, as a spec would state it>";
 
 pub fn skipped(gate: &str, paths: &[String]) {
     eprintln!(
@@ -19,59 +21,80 @@ fn built_in(text: &str) -> String {
     text.lines().skip(1).collect::<Vec<_>>().join("\n")
 }
 
-pub fn prompt(gate: &str, docs: &[String], brief: &Brief) -> Result<String, String> {
-    let template = match &brief.prompt {
+fn shape_of(simple: bool) -> &'static str {
+    if simple {
+        "findings=<n>"
+    } else {
+        "major=<n> moderate=<n> minor=<n>"
+    }
+}
+
+// Every field the runner must report, in the line it must report them on: what is not stated here cannot be demanded of it.
+fn asked_of(simple: bool) -> String {
+    format!(
+        "reviewer=<who reviewed> session=<this review\'s id> {}",
+        shape_of(simple)
+    )
+}
+
+// The machine-read line is written here and nowhere else, so what the reviewer is asked for is the shape the runner parses.
+fn verdict_spec(declaration: &Declaration, files: &[String]) -> String {
+    let shape = asked_of(declaration.brief.simple);
+    let refusal = format!(
+        "\n\nIf you are refusing the brief, close with this instead, and review nothing:\n\n  {MARKER} {REFUSED}"
+    );
+    let listed = files
+        .iter()
+        .map(|f| format!("  {f}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "The files under review, and no others:\n{listed}\n\nClose with exactly this line, and nothing after it:\n\n  {MARKER} {shape}{refusal}"
+    )
+}
+
+pub fn prompt(
+    declaration: &Declaration,
+    intent: Option<&str>,
+    files: &[String],
+) -> Result<String, String> {
+    let template = match &declaration.brief.prompt {
         Some(path) => {
             std::fs::read_to_string(path).map_err(|e| format!("--override-prompt {path}: {e}"))?
         }
+        None if declaration.brief.simple => built_in(TEMPLATE_SIMPLE),
         None => built_in(TEMPLATE),
     };
-    let docs = docs
+    let docs = declaration
+        .docs
         .iter()
         .map(|d| format!("  {d}"))
         .collect::<Vec<_>>()
         .join("\n");
-    let ladder = built_in(if brief.simple { LADDER_SIMPLE } else { LADDER });
     Ok(template
-        .replace("{{gate}}", gate)
+        .replace("{{gate}}", &declaration.gate)
         .replace("{{docs}}", &docs)
-        .replace("{{ladder}}", &ladder))
+        .replace("{{intent}}", intent.unwrap_or(PLACEHOLDER))
+        .replace("{{verdict}}", &verdict_spec(declaration, files)))
 }
 
-// The zero is shown only where one is demanded: every other count is a slot for what the reviewer actually reported, and a literal 0 in the shape is an invitation to write one.
 fn shape(inv: &Invocation) -> String {
     let key = key_for(&inv.gate);
-    let tail = if inv.per_file { " file=<path>" } else { "" };
-    let major = if inv.brief.simple { "<n>" } else { "0" };
-    format!("  {key}: reviewer=<id> major={major} moderate=<n> minor=<n>{tail}")
+    let counts = shape_of(inv.brief.simple);
+    format!("  {key}: reviewer=<id> {counts} token=<issued>")
 }
 
-// What the counts cost is the one thing an advisory gate states differently, so it is the one thing spelled out per mode.
-const EARNED: &str = "\
-Earned by a review you run yourself: spawn a reviewer in a fresh context, hand it the
-block below, fix every MODERATE it names, then write the counts it REPORTED into the
-trailer. Only major=0 passes; there is no re-review. Trailers must be the LAST paragraph.";
-
-const EARNED_SIMPLE: &str = "\
-Earned by a review you run yourself: spawn a reviewer in a fresh context, hand it the
-block below, then write the counts it reported into the trailer. This gate is advisory:
-nothing it finds blocks the commit. Trailers must be the LAST paragraph.";
-
-pub fn missing(inv: &Invocation, detail: &str) -> Result<(), String> {
+// The remedy is one command: the reviewer is never briefed by hand any more, so nothing here is forwarded anywhere.
+pub fn missing(inv: &Invocation, detail: &str) {
     eprintln!("\ngit-agent-verdict: {}: REVIEW GATE FAILED\n", inv.gate);
     eprintln!("MISSING — {detail}\n");
     eprintln!("{}\n", shape(inv));
+    eprintln!("Earned by a review this tool runs for you:\n");
     eprintln!(
-        "{}\n",
-        if inv.brief.simple {
-            EARNED_SIMPLE
-        } else {
-            EARNED
-        }
+        "  git agent-verdict attest --intent \"<the aim of the change, in one flat line>\"\n"
     );
-    eprintln!("── FORWARD BELOW THIS LINE ──");
-    eprintln!("{}", prompt(&inv.gate, &inv.docs, &inv.brief)?);
-    Ok(())
+    eprintln!("It runs the next gate, records what the reviewer reported, and hands back the");
+    eprintln!("trailer to paste. Trailers must be the LAST paragraph of the message.");
 }
 
 fn refused(label: &str, judged_by: &str, rubrics: &[String]) {
@@ -92,19 +115,51 @@ pub fn preflight(rubrics: &[String]) {
     refused(crate::GUARD_LABEL, "a review in this hook", rubrics);
 }
 
-// All three counts, because a passing commit now carries findings: only major= had to be zero.
-pub fn attested(gate: &str, count: usize, counts: (u32, u32, u32)) {
-    let (major, moderate, minor) = counts;
+pub fn summarize(verdicts: &[Verdict]) -> String {
+    let (mut major, mut moderate, mut minor, mut findings) = (0, 0, 0, 0);
+    for verdict in verdicts {
+        match verdict.counts {
+            Counts::Graded {
+                major: a,
+                moderate: b,
+                minor: c,
+            } => {
+                major += a;
+                moderate += b;
+                minor += c;
+            }
+            Counts::Advisory { findings: n } => findings += n,
+        }
+    }
+    match verdicts.first().map(|v| v.counts) {
+        Some(Counts::Advisory { .. }) => format!("findings={findings}"),
+        _ => format!("major={major} moderate={moderate} minor={minor}"),
+    }
+}
+
+pub fn attested(gate: &str, count: usize, verdicts: &[Verdict]) {
     eprintln!(
-        "git-agent-verdict: {gate}: attested ({count} verdict(s), major={major} moderate={moderate} minor={minor})"
+        "git-agent-verdict: {gate}: attested ({count} verdict(s), {})",
+        summarize(verdicts)
     );
 }
 
 pub fn blocked(gate: &str, major: u32) {
     eprintln!("\ngit-agent-verdict: {gate}: DECLARED BLOCKER");
     eprintln!("  major={major} (must be 0)");
-    eprintln!("\nA MAJOR is not the author's to patch. The fix is re-planned by an agent that did");
-    eprintln!("not write the change, then implemented and reviewed afresh.");
+    eprintln!("\nThe review named what is wrong. How it gets fixed is yours to decide; this gate");
+    eprintln!("reopens only when the same gate is attested again.");
+}
+
+// A trailer whose token names no entry is the one thing a well-formed forgery looks like, so it says what it is rather than what is malformed.
+pub fn untraceable(gate: &str, token: &str) {
+    eprintln!("\ngit-agent-verdict: {gate}: UNKNOWN TOKEN\n");
+    eprintln!("  token={token} matches no review recorded for this HEAD.");
+    eprintln!("\nRun `git agent-verdict attest --intent \"…\"` and paste the trailer it returns.");
+}
+
+pub fn mismatch(gate: &str, detail: &str) {
+    eprintln!("\ngit-agent-verdict: {gate}: TRAILER CONTRADICTS THE REVIEW\n  {detail}");
 }
 
 // The install command is in the line: the reader is a hook's stderr, and an agent told only that the binary is old will otherwise invent one.
@@ -116,4 +171,38 @@ pub fn stale(want: &str, have: &str) {
 
 pub fn malformed(gate: &str, detail: &str) {
     eprintln!("\ngit-agent-verdict: {gate}: MALFORMED TRAILER\n  {detail}");
+}
+
+pub fn reviewing(gate: &str, reviewer: &str) {
+    eprintln!("git-agent-verdict: {gate}: reviewing with {reviewer}…");
+}
+
+pub fn reviewed(gate: &str, verdicts: &[Verdict], blocked: bool, next: Option<&str>) {
+    eprintln!("\ngit-agent-verdict: {gate}: {}\n", summarize(verdicts));
+    if blocked {
+        eprintln!(
+            "MAJOR — this gate is not passed. Fix what the review named, then run attest again."
+        );
+        return;
+    }
+    match next {
+        Some(gate) => {
+            eprintln!("Address what it found, then run attest again for the {gate} gate.")
+        }
+        None => eprintln!("Address what it found, then run attest again for the trailers."),
+    }
+}
+
+// The counts reach the message from the diary rather than from whoever read the review, and nothing in between could have retyped them.
+pub fn committed(trailers: &[String], out: &str) {
+    eprintln!("\ngit-agent-verdict: every gate attested — committed.\n");
+    for line in trailers {
+        eprintln!("  {line}");
+    }
+    print!("{out}");
+}
+
+pub fn reset_done(count: u32, reason: &str) {
+    eprintln!("git-agent-verdict: review state cleared (reset {count} for this HEAD): {reason}");
+    eprintln!("The reason is recorded and travels into the commit message.");
 }

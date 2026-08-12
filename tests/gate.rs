@@ -1,83 +1,86 @@
-// Concern: the gate's decision against a real repo — what passes, what is refused, what exits 2 | Non-concern: the reviewer block it prints (tests/brief.rs) | IO: (temp repo, message) -> exit status
+// Concern: the gate's decision against a real repo — what passes, what is refused, what exits 2 | Non-concern: the review that earns a trailer (tests/attest.rs) | IO: (temp repo, message) -> exit status
 
 mod common;
 
-use common::{Repo, BIN, CLEAN};
+use common::{Repo, BIN, DUMMY, STANDARDS};
 
 #[test]
-fn an_attested_commit_passes() {
-    let repo = Repo::new();
-    repo.stage(&["src.rs"]);
-    let (code, out) = repo.standards(CLEAN);
-    assert_eq!(code, 0, "{out}");
-    assert!(out.contains("attested"), "{out}");
-}
-
-#[test]
-fn an_unattested_commit_fails_and_prints_the_prompt() {
+fn an_unattested_commit_fails_and_names_the_remedy() {
     let repo = Repo::new();
     repo.stage(&["src.rs"]);
     let (code, out) = repo.standards("subject\n\nbody\n");
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("REVIEW GATE FAILED"), "{out}");
-    assert!(out.contains("NEUTRAL REVIEW"), "{out}");
+    assert!(out.contains("attest --intent"), "{out}");
+}
+
+// A hand-written trailer is well-formed and names nothing: the counts in a message are worth only as much as the review they can be traced to.
+#[test]
+fn a_trailer_whose_token_names_no_review_is_refused() {
+    let repo = Repo::new();
+    repo.stage(&["src.rs"]);
+    let (code, out) = repo.standards(DUMMY);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("UNKNOWN TOKEN"), "{out}");
 }
 
 #[test]
-fn a_declared_blocker_fails() {
+fn an_edited_count_is_caught_against_the_recorded_review() {
     let repo = Repo::new();
+    repo.declare(
+        "VERDICT: reviewer=fake session=s-09 major=1 moderate=0 minor=0",
+        &[STANDARDS],
+    );
     repo.stage(&["src.rs"]);
-    let msg = "subject\n\nReviewed-standards: reviewer=opus major=1 moderate=0 minor=0\n";
-    let (code, out) = repo.standards(msg);
+    repo.attest("raise the staged file's line count");
+    let token = repo.issued_token();
+
+    let clean = format!(
+        "subject\n\nReviewed-standards: reviewer=fake major=0 moderate=0 minor=0 token={token}\n"
+    );
+    let (code, out) = repo.standards(&clean);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("CONTRADICTS"), "{out}");
+    assert!(out.contains("major=1"), "{out}");
+}
+
+#[test]
+fn a_declared_blocker_fails_even_when_it_is_traceable() {
+    let repo = Repo::new();
+    repo.declare(
+        "VERDICT: reviewer=fake session=s-09 major=1 moderate=0 minor=0",
+        &[STANDARDS],
+    );
+    repo.stage(&["src.rs"]);
+    repo.attest("raise the staged file's line count");
+    let token = repo.issued_token();
+
+    let honest = format!(
+        "subject\n\nReviewed-standards: reviewer=fake major=1 moderate=0 minor=0 token={token}\n"
+    );
+    let (code, out) = repo.standards(&honest);
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("DECLARED BLOCKER"), "{out}");
-}
-
-// The count records what the reviewer found. The MODERATEs were fixed without a second look, so what survives into the trailer is a record, not an outstanding defect.
-#[test]
-fn a_moderate_count_passes_and_is_reported() {
-    let repo = Repo::new();
-    repo.stage(&["src.rs"]);
-    let msg = "subject\n\nReviewed-standards: reviewer=opus major=0 moderate=2 minor=1\n";
-    let (code, out) = repo.standards(msg);
-    assert_eq!(code, 0, "{out}");
-    assert!(out.contains("moderate=2"), "{out}");
-}
-
-#[test]
-fn a_simple_gate_records_findings_without_blocking_on_them() {
-    let repo = Repo::new();
-    repo.stage(&["src.rs"]);
-    let args = ["look", "--simple", "--doc", "rubric.md", "--path", "."];
-    let msg = "subject\n\nReviewed-look: reviewer=opus major=3 moderate=2 minor=1\n";
-    let (code, out) = repo.run(msg, &args);
-    assert_eq!(code, 0, "{out}");
-    assert!(out.contains("major=3"), "{out}");
-
-    // Advisory about the findings, not about the review: the trailer itself is still demanded.
-    let (code, out) = repo.run("subject\n\nbody\n", &args);
-    assert_eq!(code, 1, "{out}");
-    assert!(out.contains("REVIEW GATE FAILED"), "{out}");
-}
-
-#[test]
-fn a_repeated_count_cannot_bury_a_blocker() {
-    let repo = Repo::new();
-    repo.stage(&["src.rs"]);
-    let msg = "subject\n\nReviewed-standards: reviewer=opus major=1 major=0 moderate=0 minor=0\n";
-    let (code, out) = repo.standards(msg);
-    assert_eq!(code, 1, "{out}");
-    assert!(out.contains("more than once"), "{out}");
 }
 
 #[test]
 fn a_trailer_above_the_body_is_named_not_reported_missing() {
     let repo = Repo::new();
     repo.stage(&["src.rs"]);
-    let msg = "subject\n\nReviewed-standards: reviewer=opus major=0 moderate=0 minor=0\n\nbody\n";
+    let msg = "subject\n\nReviewed-standards: reviewer=opus major=0 moderate=0 minor=0 token=ab\n\nbody\n";
     let (code, out) = repo.standards(msg);
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("trailing paragraph"), "{out}");
+}
+
+#[test]
+fn a_trailer_with_no_token_is_malformed() {
+    let repo = Repo::new();
+    repo.stage(&["src.rs"]);
+    let msg = "subject\n\nReviewed-standards: reviewer=opus major=0 moderate=0 minor=0\n";
+    let (code, out) = repo.standards(msg);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("MALFORMED"), "{out}");
 }
 
 #[test]
@@ -85,7 +88,7 @@ fn a_gate_with_no_matching_staged_file_is_skipped_and_says_so() {
     let repo = Repo::new();
     repo.stage(&["src.rs"]);
     let (code, out) = repo.run(
-        CLEAN,
+        DUMMY,
         &["standards", "--doc", "rubric.md", "--path", "*.py"],
     );
     assert_eq!(code, 0, "{out}");
@@ -96,7 +99,7 @@ fn a_gate_with_no_matching_staged_file_is_skipped_and_says_so() {
 fn staging_a_rubric_refuses_the_commit() {
     let repo = Repo::new();
     repo.stage(&["src.rs", "rubric.md"]);
-    let (code, out) = repo.standards(CLEAN);
+    let (code, out) = repo.standards(DUMMY);
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("RUBRIC IS STAGED"), "{out}");
 }
@@ -144,10 +147,9 @@ fn the_preflight_is_a_no_op_for_a_doc_outside_the_worktree() {
 fn the_preflight_rejects_arguments_its_mode_cannot_use() {
     let repo = Repo::new();
     repo.stage(&["src.rs", "rubric.md"]);
-    let bad: [&[&str]; 6] = [
+    let bad: [&[&str]; 5] = [
         &["--rubric-guard"],
         &["--rubric-guard", "--doc", "rubric.md", "--path", "."],
-        &["--rubric-guard", "--doc", "rubric.md", "--per-file"],
         &["--rubric-guard", "--doc", "rubric.md", "--simple"],
         &[
             "--rubric-guard",
@@ -163,23 +165,6 @@ fn the_preflight_rejects_arguments_its_mode_cannot_use() {
         assert_eq!(code, 2, "{args:?}: {out}");
         assert!(out.contains("usage:"), "{args:?}: {out}");
     }
-}
-
-#[test]
-fn per_file_demands_a_trailer_for_every_staged_file() {
-    let repo = Repo::new();
-    repo.write("other.rs", "more");
-    repo.stage(&["src.rs", "other.rs"]);
-    let msg = "subject\n\nReviewed-ann: reviewer=opus major=0 moderate=0 minor=0 file=src.rs\n";
-    let args = ["ann", "--per-file", "--doc", "rubric.md", "--path", "."];
-    let (code, out) = repo.run(msg, &args);
-    assert_eq!(code, 1, "{out}");
-    assert!(out.contains("other.rs"), "{out}");
-
-    let both =
-        format!("{msg}Reviewed-ann: reviewer=opus major=0 moderate=0 minor=0 file=other.rs\n");
-    let (code, out) = repo.run(&both, &args);
-    assert_eq!(code, 0, "{out}");
 }
 
 #[test]
@@ -202,7 +187,7 @@ fn a_forged_merge_subject_is_not_exempt() {
 fn a_misplaced_pathspec_cannot_be_absorbed_into_docs() {
     let repo = Repo::new();
     repo.stage(&["src.rs"]);
-    let (code, out) = repo.run(CLEAN, &["standards", "--doc", "rubric.md", "."]);
+    let (code, out) = repo.run(DUMMY, &["standards", "--doc", "rubric.md", "."]);
     assert_eq!(code, 2, "{out}");
 }
 
@@ -210,7 +195,7 @@ fn a_misplaced_pathspec_cannot_be_absorbed_into_docs() {
 fn a_doc_that_does_not_exist_fails_loudly() {
     let repo = Repo::new();
     repo.stage(&["src.rs"]);
-    let (code, out) = repo.run(CLEAN, &["standards", "--doc", "nope.md", "--path", "."]);
+    let (code, out) = repo.run(DUMMY, &["standards", "--doc", "nope.md", "--path", "."]);
     assert_eq!(code, 2, "{out}");
 }
 
@@ -218,10 +203,8 @@ fn a_doc_that_does_not_exist_fails_loudly() {
 fn a_literal_path_naming_nothing_tracked_is_a_typo() {
     let repo = Repo::new();
     repo.stage(&["src.rs"]);
-    let (code, out) = repo.run(
-        CLEAN,
-        &["standards", "--doc", "rubric.md", "--path", "NOPE.md"],
-    );
+    let args = ["standards", "--doc", "rubric.md", "--path", "NOPE.md"];
+    let (code, out) = repo.run(DUMMY, &args);
     assert_eq!(code, 2, "{out}");
 }
 
@@ -278,11 +261,10 @@ fn an_agent_coauthor_line_is_dropped_but_a_human_one_is_kept() {
     let repo = Repo::new();
     repo.stage(&["src.rs"]);
     let msg = "subject\n\nbody\n\n\
-        Reviewed-standards: reviewer=opus major=0 moderate=0 minor=0\n\
+        Reviewed-standards: reviewer=opus major=0 moderate=0 minor=0 token=ab\n\
         Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>\n\
         Co-authored-by: Claude Bernard <claude@example.com>\n";
-    let (code, out) = repo.standards(msg);
-    assert_eq!(code, 0, "{out}");
+    repo.standards(msg);
     let rewritten = std::fs::read_to_string(repo.dir.join("MSG")).expect("read back");
     assert!(!rewritten.contains("anthropic.com"), "{rewritten}");
     assert!(rewritten.contains("claude@example.com"), "{rewritten}");
