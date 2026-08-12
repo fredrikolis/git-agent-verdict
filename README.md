@@ -27,7 +27,7 @@ Installs as `git agent-verdict`. `--help` is the flag reference; this file is no
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
-git agent-verdict --require-version 0.4.0
+git agent-verdict --require-version 1.0
 git agent-verdict --rubric-guard \
   --doc docs/repo-standards.md --doc docs/annotation-guide.md --doc docs/communication-style.md
 git agent-verdict "$1" standards   --doc docs/repo-standards.md --path .
@@ -61,11 +61,11 @@ Each line is the whole declaration of its gate, which is what lets the tool brie
 as that gate will judge — it re-runs this hook to read the declarations rather than keeping a second
 copy in a config file.
 
-A pin, not a floor. `0.4` is a compatibility line in cargo's sense, and a release that moves it may
-take a flag away or change what a trailer must carry — a hook written against the old one cannot
-tell, and finds out when a commit dies on an unknown flag. Both directions are refused: too old
-cannot answer what the hook asks, and a later line answers something else. One line in the hook,
-rather than a shell version-compare beside every gate.
+A pin, not a floor. `1.0` names a compatibility line: every additive `1.x` satisfies it, and `2.0.0`
+will not, because a major release may take a flag away or change what a trailer must carry. A hook
+written against the old grammar cannot tell on its own, and finds out when a commit dies on an
+unknown flag. Both directions are refused: too old cannot answer what the hook asks, and a later
+line answers something else. One line in the hook, rather than a version-compare beside every gate.
 
 Most gates are `--simple` above, and that is the usual shape: one gate holds the bar the work has to
 clear, and the rest report. A repo that blocks on every dimension it cares about spends its review

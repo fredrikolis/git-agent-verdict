@@ -4,7 +4,12 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
-## [0.4.0] - 2026-08-12
+## [1.0.0] - 2026-08-12
+
+First release with a compatibility promise. Everything below is breaking against 0.3.0, and the
+version says so: 0.x promised nothing, which is exactly how a hook pinned at a floor sailed into a
+release that had taken its flags away. From here a break is a major bump and `^1` passes anything
+additive.
 
 ### Added
 - `attest --intent <line>`: the tool runs the review itself. One gate per run, in declaration order;
@@ -113,7 +118,7 @@
 - A circular-rubric guard: staging a gate's own `--doc` refuses the commit.
 - An exemption for `Merge`, `Revert`, `fixup!` and `squash!`, the first two confirmed by git's state.
 
-[0.4.0]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.4.0
+[1.0.0]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v1.0.0
 [0.3.0]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.3.0
 [0.2.0]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.2.0
 [0.1.6]: https://github.com/fredrikolis/git-agent-verdict/releases/tag/v0.1.6

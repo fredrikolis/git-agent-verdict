@@ -210,7 +210,8 @@ fn a_literal_path_naming_nothing_tracked_is_a_typo() {
 
 #[test]
 fn version_and_help_are_info_flags_that_exit_clean() {
-    for (flag, needle) in [("--version", "git-agent-verdict 0."), ("--help", "usage:")] {
+    let version = format!("git-agent-verdict {}", env!("CARGO_PKG_VERSION"));
+    for (flag, needle) in [("--version", version.as_str()), ("--help", "usage:")] {
         let out = std::process::Command::new(BIN)
             .arg(flag)
             .output()
@@ -242,7 +243,7 @@ fn the_installed_line_satisfies_a_pin_on_that_line() {
 // The failure the old floor could not see: a release that took a flag away passed a hook pinned below it, and the hook found out when a commit died.
 #[test]
 fn a_pin_on_another_line_is_refused_in_both_directions() {
-    for want in ["0.3.0", "0.1", "1.0.0", "99.0.0"] {
+    for want in ["0.3.0", "0.1", "2.0.0", "99.0.0"] {
         let out = std::process::Command::new(BIN)
             .args(["--require-version", want])
             .output()
@@ -258,8 +259,11 @@ fn a_pin_on_another_line_is_refused_in_both_directions() {
 
 #[test]
 fn a_later_patch_on_the_same_line_is_too_old_not_incompatible() {
+    let installed = env!("CARGO_PKG_VERSION");
+    let (major, rest) = installed.split_once('.').expect("a dotted version");
+    let minor = rest.split('.').next().expect("a minor field");
     let out = std::process::Command::new(BIN)
-        .args(["--require-version", "0.4.99"])
+        .args(["--require-version", &format!("{major}.{minor}.99")])
         .output()
         .expect("binary runs");
     let text = String::from_utf8_lossy(&out.stderr).into_owned();
