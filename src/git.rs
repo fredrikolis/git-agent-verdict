@@ -56,6 +56,11 @@ pub fn unmatched_literals(paths: &[String]) -> Result<Vec<String>, String> {
     Ok(bad)
 }
 
+pub fn toplevel() -> Result<String, String> {
+    let out = run(&["rev-parse", "--show-toplevel"])?;
+    Ok(String::from_utf8_lossy(&out).trim().to_string())
+}
+
 // Repo-relative form of a doc, or None when it lives outside the worktree and can never be staged.
 pub fn relative_to_root(doc: &str) -> Option<String> {
     let root = run(&["rev-parse", "--show-toplevel"]).ok()?;

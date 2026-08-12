@@ -2,7 +2,9 @@
 
 use crate::cli::Invocation;
 use crate::declarations::Declaration;
+use crate::git;
 use crate::runner::{MARKER, REFUSED};
+use crate::state;
 use crate::trailer::{key_for, Counts, Verdict};
 
 const TEMPLATE: &str = include_str!("prompt.md");
@@ -173,6 +175,33 @@ pub fn malformed(gate: &str, detail: &str) {
     eprintln!("\ngit-agent-verdict: {gate}: MALFORMED TRAILER\n  {detail}");
 }
 
+// Outside the repo and outside the diary: the diary is dropped the moment HEAD moves, which is exactly when an author wants to re-read what the review said about the commit that just landed.
+fn log_path(gate: &str) -> Result<std::path::PathBuf, String> {
+    let root = git::toplevel()?;
+    let name = std::path::Path::new(&root)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "repo".to_string());
+    let slug = format!("{name}-{}", &state::fingerprint(&root)[..8]);
+    let home = std::env::var("HOME").map_err(|_| "no HOME to write the review log under")?;
+    let dir = std::path::Path::new(&home)
+        .join(".agent-verdicts")
+        .join(slug);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    let head = git::head_sha();
+    let mut n = 1;
+    while dir.join(format!("{head}-{n}-{gate}.log")).exists() {
+        n += 1;
+    }
+    Ok(dir.join(format!("{head}-{n}-{gate}.log")))
+}
+
+pub fn logged(gate: &str, findings: &str) -> Option<std::path::PathBuf> {
+    let path = log_path(gate).ok()?;
+    std::fs::write(&path, findings).ok()?;
+    Some(path)
+}
+
 pub fn reviewing(gate: &str) {
     eprintln!("git-agent-verdict: {gate}: reviewing…");
 }
@@ -184,10 +213,15 @@ pub fn reviewed(
     next: Option<&str>,
     findings: &str,
 ) {
+    // The verdict on stdout, the report on disk: a review runs to hundreds of lines, and an author reading the tail of a stream misses the findings above it.
+    println!("{gate}: {}", summarize(verdicts));
     if !findings.is_empty() {
-        eprintln!("\n{findings}");
+        match logged(gate, findings) {
+            Some(path) => eprintln!("\nsee the full report: {}", path.display()),
+            None => eprintln!("\n{findings}"),
+        }
     }
-    eprintln!("\ngit-agent-verdict: {gate}: {}\n", summarize(verdicts));
+    eprintln!();
     if blocked {
         eprintln!(
             "MAJOR — this gate is not passed. Fix what the review named, then run attest again."

@@ -164,11 +164,16 @@ fn what_the_reviewer_said_reaches_the_author() {
     repo.declare(&spoken, &[STANDARDS]);
     repo.stage(&["src.rs"]);
     let run = repo.attest(AIM);
-    assert!(
-        run.err.contains("the lede repeats the heading"),
-        "{}",
-        run.err
-    );
+    let path = run
+        .err
+        .lines()
+        .find_map(|l| l.strip_prefix("see the full report: "))
+        .expect("a path")
+        .trim()
+        .to_string();
+    let body = std::fs::read_to_string(&path).expect("the report");
+    assert!(body.contains("the lede repeats the heading"), "{body}");
+    let _ = std::fs::remove_file(&path);
 }
 
 #[test]
@@ -213,4 +218,29 @@ fn a_reset_without_a_reason_is_refused() {
     let run = repo.capture(&["reset"]);
     assert_eq!(run.code, 2, "{}", run.err);
     assert!(run.err.contains("needs a reason"), "{}", run.err);
+}
+
+// A full review runs to hundreds of lines; an author reading the tail of the output would miss the findings above it, so the whole report is on disk and named.
+#[test]
+fn a_long_report_is_written_where_it_can_be_read_whole() {
+    let repo = Repo::new();
+    let long: String = (1..=60)
+        .map(|n| format!("MINOR - finding {n}\\n"))
+        .collect();
+    repo.declare(&format!("{long}{CLEAN}"), &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    let run = repo.attest(AIM);
+    assert!(run.out.contains("standards: major=0"), "{}", run.out);
+    assert!(!run.err.contains("finding 42"), "{}", run.err);
+    let path = run
+        .err
+        .lines()
+        .find_map(|l| l.strip_prefix("see the full report: "))
+        .expect("a path")
+        .trim()
+        .to_string();
+    let body = std::fs::read_to_string(&path).expect("the report");
+    assert!(body.contains("finding 42"), "{body}");
+    assert!(body.contains("finding 60"), "{body}");
+    let _ = std::fs::remove_file(&path);
 }

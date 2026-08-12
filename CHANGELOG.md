@@ -15,8 +15,11 @@
 - `reset <reason>`: clears this commit's recorded reviews. The count and reasons reach the message.
 - `token=` on every trailer: the gate resolves it and rejects counts that contradict the review.
 - The reviewer's brief closes with a `VERDICT:` line, which is where the counts are read from.
-- Everything else the reviewer said reaches the author: the counts say how much was found, and
-  only the report says what.
+- Everything else the reviewer said is written to `~/.agent-verdicts/<repo>/<head>-N-<gate>.log`
+  and the path is printed. The counts say how much was found; only the report says what, and a
+  full review is longer than the tail of a stream anyone reads. The log outlives the diary, which
+  is dropped the moment HEAD moves — which is when an author wants to re-read it.
+- The verdict goes to stdout, everything else to stderr.
 - `VERDICT: refused` — the reviewer's answer to a brief that argues. It blocks on an advisory gate
   too, where the old guard's `major=1` could not.
 

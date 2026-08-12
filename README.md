@@ -51,7 +51,9 @@ git config --local  agent-verdict.runner "…"             # this clone only
 key or SDK: it runs that command line with the brief on stdin and reads the verdict back. The
 command must report `reviewer=` and `session=` on the VERDICT line, and the brief says so — a
 wrapper piping through `jq` lifts both out of `--output-format json`. Rewrite the VERDICT line and pass the rest through —
-a wrapper that filters to the verdict alone throws away the only part that says what was wrong. Neither is defaulted: a
+a wrapper that filters to the verdict alone throws away the only part that says what was wrong.
+
+The verdict lands on stdout; the report is written to `~/.agent-verdicts/` and its path printed. Neither is defaulted: a
 runner that omits one has broken the contract the brief states, and a label invented here would put
 a guess on the record.
 
@@ -91,11 +93,9 @@ it until it stops complaining; the last run has no gate left and commits.
 ```console
 $ git agent-verdict attest --intent "the commit-msg hook delegates verdict verification to a CLI"
 git-agent-verdict: standards: reviewing…
+standards: major=0 moderate=1 minor=1
 
-MODERATE - the lede restates the heading - "A figure is a file." then "…is a .json file"
-MINOR - `datasets` is named but never shown
-
-git-agent-verdict: standards: major=0 moderate=1 minor=1
+see the full report: ~/.agent-verdicts/my-repo-3f9a1c04/4da9793…-1-standards.log
 
 Address what it found, then run attest again for the annotations gate.
 ```
