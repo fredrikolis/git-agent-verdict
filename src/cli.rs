@@ -7,7 +7,7 @@ pub const USAGE: &str = concat!(
     "       git-agent-verdict reset <reason>\n",
     "       git-agent-verdict --rubric-guard --doc <path>...\n",
     "       git-agent-verdict --reviewer-prompt <gate>\n",
-    "       git-agent-verdict --check-min-version <version>"
+    "       git-agent-verdict --require-version <version>"
 );
 
 // Wide enough for one real change's aim, and narrow enough that two aims will not fit: the reviewer refuses a brief that argues, so this bounds the change rather than the prose.
@@ -35,7 +35,7 @@ pub enum Mode {
     Reset(String),
     RubricGuard(Vec<String>),
     ReviewerPrompt(String),
-    MinVersion(String),
+    RequireVersion(String),
 }
 
 // Same reason as a doc: the reviewer block promises absolute paths, and a mistyped override would otherwise fall back to the built-in template without saying so.
@@ -61,7 +61,7 @@ struct Parsed {
     positional: Vec<String>,
     guard: bool,
     reviewer_prompt: Option<String>,
-    min_version: Option<String>,
+    require_version: Option<String>,
     intent: Option<String>,
     brief: Brief,
     docs: Vec<String>,
@@ -78,8 +78,8 @@ fn collect(args: impl Iterator<Item = String>) -> Result<Parsed, String> {
             "--reviewer-prompt" => {
                 p.reviewer_prompt = Some(args.next().ok_or("--reviewer-prompt needs a gate name")?)
             }
-            "--check-min-version" => {
-                p.min_version = Some(args.next().ok_or("--check-min-version needs a version")?)
+            "--require-version" => {
+                p.require_version = Some(args.next().ok_or("--require-version needs a version")?)
             }
             "--intent" => p.intent = Some(args.next().ok_or("--intent needs a line of text")?),
             "--simple" => p.brief.simple = true,
@@ -141,7 +141,7 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Mode, String> {
         _ => {}
     }
     // Answered from the binary's own version alone, so it takes nothing else: a hook runs it before it asks the tool for anything, where there is no gate to speak of yet.
-    if let Some(want) = p.min_version {
+    if let Some(want) = p.require_version {
         let clean = !p.guard
             && !p.brief.simple
             && p.brief.prompt.is_none()
@@ -149,8 +149,8 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Mode, String> {
             && p.docs.is_empty()
             && p.paths.is_empty()
             && p.positional.is_empty();
-        only("--check-min-version takes a version only", !clean)?;
-        return Ok(Mode::MinVersion(want));
+        only("--require-version takes a version only", !clean)?;
+        return Ok(Mode::RequireVersion(want));
     }
     if let Some(gate) = p.reviewer_prompt {
         let detail = "--reviewer-prompt takes a gate name only: how the gate is briefed comes from the commit-msg hook";

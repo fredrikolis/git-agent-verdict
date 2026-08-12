@@ -221,35 +221,57 @@ fn version_and_help_are_info_flags_that_exit_clean() {
     }
 }
 
-// A floor: the release above it passes, which is the whole difference from pinning an equality.
+// A pin, not a floor: 0.4 is its own compatibility line, and a hook that declares its gates against one release must not be answered by another.
 #[test]
-fn the_version_floor_passes_at_or_below_the_installed_version() {
+fn the_installed_line_satisfies_a_pin_on_that_line() {
     let installed = env!("CARGO_PKG_VERSION");
-    for want in [installed, "0.0.1", "0.1"] {
+    let (major, minor) = installed.split_once('.').expect("a dotted version");
+    for want in [
+        installed.to_string(),
+        format!("{major}.{minor}"),
+        format!("{major}.{minor}.0"),
+    ] {
         let out = std::process::Command::new(BIN)
-            .args(["--check-min-version", want])
+            .args(["--require-version", &want])
             .output()
             .expect("binary runs");
         assert_eq!(out.status.code(), Some(0), "{want}: {out:?}");
     }
 }
 
+// The failure the old floor could not see: a release that took a flag away passed a hook pinned below it, and the hook found out when a commit died.
 #[test]
-fn a_floor_above_the_installed_version_fails_and_names_the_remedy() {
+fn a_pin_on_another_line_is_refused_in_both_directions() {
+    for want in ["0.3.0", "0.1", "1.0.0", "99.0.0"] {
+        let out = std::process::Command::new(BIN)
+            .args(["--require-version", want])
+            .output()
+            .expect("binary runs");
+        let text = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert_eq!(out.status.code(), Some(1), "{want}: {text}");
+        assert!(
+            text.contains("cargo install git-agent-verdict"),
+            "{want}: {text}"
+        );
+    }
+}
+
+#[test]
+fn a_later_patch_on_the_same_line_is_too_old_not_incompatible() {
     let out = std::process::Command::new(BIN)
-        .args(["--check-min-version", "99.0.0"])
+        .args(["--require-version", "0.4.99"])
         .output()
         .expect("binary runs");
     let text = String::from_utf8_lossy(&out.stderr).into_owned();
     assert_eq!(out.status.code(), Some(1), "{text}");
-    assert!(text.contains("cargo install git-agent-verdict"), "{text}");
+    assert!(text.contains("is older than"), "{text}");
 }
 
 #[test]
-fn a_floor_that_is_not_a_version_is_a_usage_error() {
+fn a_pin_that_is_not_a_version_is_a_usage_error() {
     for want in ["v0.3", "latest"] {
         let out = std::process::Command::new(BIN)
-            .args(["--check-min-version", want])
+            .args(["--require-version", want])
             .output()
             .expect("binary runs");
         assert_eq!(out.status.code(), Some(2), "{want}: {out:?}");

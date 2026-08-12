@@ -164,10 +164,17 @@ pub fn mismatch(gate: &str, detail: &str) {
     eprintln!("\ngit-agent-verdict: {gate}: TRAILER CONTRADICTS THE REVIEW\n  {detail}");
 }
 
-// The install command is in the line: the reader is a hook's stderr, and an agent told only that the binary is old will otherwise invent one.
+// The install command is in the line: the reader is a hook's stderr, and an agent told only that the binary is wrong will otherwise invent one.
 pub fn stale(want: &str, have: &str) {
     eprintln!(
-        "git-agent-verdict: {have} is older than the required {want}: cargo install git-agent-verdict --version '>={want}'"
+        "git-agent-verdict: {have} is older than the required {want}: cargo install git-agent-verdict --version '^{want}'"
+    );
+}
+
+// Named apart from stale because the remedy is the opposite one: the binary is ahead, and what a hook declares was written against a grammar this release no longer speaks.
+pub fn incompatible(want: &str, have: &str) {
+    eprintln!(
+        "git-agent-verdict: {have} is not the {want} line this hook declares its gates against: cargo install git-agent-verdict --version '^{want}'"
     );
 }
 

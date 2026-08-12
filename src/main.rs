@@ -25,20 +25,31 @@ fn fields(version: &str, what: &str) -> Result<Vec<u32>, String> {
         .collect()
 }
 
-// A floor, not an equality: what must not arrive silently is a different reviewer brief, and that only happens when the floor is raised deliberately. An additive release passes.
-fn min_version(want: &str) -> Result<bool, String> {
+// Cargo's caret rule: the leading run through the first non-zero field, so 0.4 is a line of its own and 0.4.1 is not.
+fn line_of(version: &[u32]) -> usize {
+    version.iter().position(|field| *field != 0).unwrap_or(0)
+}
+
+// A pin, not a floor: too old cannot answer what the hook asks, and a later line answers something else. No shim — a hook meets the tool it declares against, or says so.
+fn require_version(want: &str) -> Result<bool, String> {
     let have = env!("CARGO_PKG_VERSION");
-    let (floor, installed) = (
-        fields(want, "--check-min-version")?,
+    let (wanted, installed) = (
+        fields(want, "--require-version")?,
         fields(have, "this binary's version")?,
     );
-    let width = floor.len().max(installed.len());
+    let width = wanted.len().max(installed.len());
     // Padded, because [0, 2] and [0, 2, 0] are one version and compare unequal as vectors.
     let padded = |mut v: Vec<u32>| {
         v.resize(width, 0);
         v
     };
-    if padded(installed) < padded(floor) {
+    let (wanted, installed) = (padded(wanted), padded(installed));
+    let line = line_of(&wanted);
+    if wanted[..=line] != installed[..=line] {
+        report::incompatible(want, have);
+        return Ok(false);
+    }
+    if installed < wanted {
         report::stale(want, have);
         return Ok(false);
     }
@@ -78,7 +89,7 @@ fn main() -> ExitCode {
         Mode::Reset(reason) => ("reset", attest::reset(reason)),
         Mode::RubricGuard(docs) => (GUARD_LABEL, gate::rubric_guard(docs)),
         Mode::ReviewerPrompt(gate) => ("reviewer-prompt", reviewer_prompt(gate)),
-        Mode::MinVersion(want) => ("check-min-version", min_version(want)),
+        Mode::RequireVersion(want) => ("require-version", require_version(want)),
     };
     match outcome {
         Ok(true) => ExitCode::SUCCESS,

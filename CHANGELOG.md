@@ -24,6 +24,12 @@
   too, where the old guard's `major=1` could not.
 
 ### Changed
+- **`--check-min-version` is replaced by `--require-version`, and it pins a compatibility line
+  rather than a floor.** `0.4` is its own line in cargo's sense: `0.4.1` satisfies a pin on `0.4`,
+  `0.5.0` and `0.3.0` do not. The floor could not see a breaking release — this one removes flags
+  and changes the trailer grammar, and every hook pinned below it passed, then died on an unknown
+  flag. The rename is deliberate: a hook still saying `--check-min-version` fails loudly on an
+  unknown flag instead of silently passing.
 - `--intent` is one line of at most 300 characters, and becomes the commit's subject. Over the limit
   names the remedy: an aim that will not fit is more than one change, so commit them separately.
 - `--simple` gates report `findings=<n>` and are briefed by their own template: an advisory review
