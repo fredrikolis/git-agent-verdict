@@ -57,6 +57,13 @@ const GUIDE: &str = r#"WIRING A REPO — git-agent-verdict
    asks. Wrapping it, pass the reviewer's own output through: the counts say how much was found,
    and only that output says what.
 
+   Fixing what a review names re-opens its gate, so the next attest reviews the same gate again.
+   $AGENT_VERDICT_PRIOR_SESSION holds the session the last reviewer reported. A runner that can
+   resume it reads what changed instead of sampling the whole rubric afresh:
+
+     git config --global agent-verdict.runner \
+       'if [ -n "$AGENT_VERDICT_PRIOR_SESSION" ]; then claude -p --resume "$AGENT_VERDICT_PRIOR_SESSION"; else claude -p; fi'
+
 4. Commit through the tool, not through git:
 
      git agent-verdict attest --intent "<the aim, one flat line>"

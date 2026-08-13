@@ -31,7 +31,7 @@ wiring is the maintainer's to fix, and the agent hitting it has no other way to 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
-git agent-verdict --require-version 1.1
+git agent-verdict --require-version 1.3
 git agent-verdict "$1" standards   --doc docs/repo-standards.md --path .
 git agent-verdict "$1" annotations --simple --doc docs/annotation-guide.md --path .
 git agent-verdict "$1" prose       --simple --doc docs/communication-style.md --path "*.md"
@@ -64,7 +64,7 @@ Each line is the whole declaration of its gate, which is what lets the tool brie
 as that gate will judge — it re-runs this hook to read the declarations rather than keeping a second
 copy in a config file.
 
-A pin, not a floor. `1.1` names a compatibility line: every additive `1.x` satisfies it, and `2.0.0`
+A pin, not a floor. `1.3` names a compatibility line: every additive `1.x` satisfies it, and `2.0.0`
 will not, because a major release may take a flag away or change what a trailer must carry. A hook
 written against the old grammar cannot tell on its own, and finds out when a commit dies on an
 unknown flag. Both directions are refused: too old cannot answer what the hook asks, and a later
@@ -95,6 +95,12 @@ git-agent-verdict: standards: REVIEW GATE FAILED
 
 `attest` reviews the next gate itself, records what the reviewer reported, and says what to fix. Run
 it until it stops complaining; the last run has no gate left and commits.
+
+Fixing what a review named moves the content its verdict describes, so that gate opens again and the
+next `attest` reviews it. That is the loop, and it ends when you stop editing: a trailer never
+attests text that is no longer there. `$AGENT_VERDICT_PRIOR_SESSION` carries the last reviewer's
+session to the next run, so a runner that can resume one reviews what changed rather than sampling
+the rubric afresh — which is what makes counts wander between rounds that fixed nothing.
 
 ```console
 $ git agent-verdict attest --intent "the commit-msg hook delegates verdict verification to a CLI"

@@ -125,9 +125,17 @@ impl Repo {
 
     // The reviewer is host configuration, set per clone here: a repo that declared one would pick an agent for every maintainer.
     pub fn declare(&self, verdict: &str, gates: &[&str]) {
+        self.declare_runner(&format!("printf '{verdict}\\n'"), gates);
+    }
+
+    // A runner that answers differently per round, or records what it was handed.
+    pub fn declare_runner(&self, cmd: &str, gates: &[&str]) {
         self.hook(gates);
-        let cmd = format!("printf '{verdict}\\n'");
-        git(&self.dir, &["config", "agent-verdict.runner", &cmd]);
+        git(&self.dir, &["config", "agent-verdict.runner", cmd]);
+    }
+
+    pub fn read(&self, name: &str) -> String {
+        std::fs::read_to_string(self.dir.join(name)).unwrap_or_default()
     }
 
     // Run until it stops complaining, which is the whole protocol: the last run has no gate left and commits.

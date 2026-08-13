@@ -16,20 +16,39 @@ fn applies(declaration: &Declaration) -> Result<bool, String> {
     Ok(!matches!(state, gate::Measure::Alone(_)))
 }
 
+// The last word on a gate, which is the only one that counts: a re-review supersedes what it was asked to look at again.
+fn latest<'a>(gate: &str, steps: &'a [state::Step]) -> Option<&'a state::Step> {
+    steps.iter().rfind(|s| s.gate == gate)
+}
+
+// Content moves because the author is fixing what the review named — that is the work, not an anomaly. The gate stays open until a verdict describes what will be committed.
+fn settled(declaration: &Declaration, steps: &[state::Step]) -> Result<bool, String> {
+    let Some(step) = latest(&declaration.gate, steps) else {
+        return Ok(false);
+    };
+    if step.blocked {
+        return Ok(false);
+    }
+    Ok(state::content_digest(&declaration.paths)? == step.content)
+}
+
 // Line order is review order, and a later gate must never be judged against content an earlier one is still changing: the position is held here so nothing has to sequence it by hand.
 fn next<'a>(hook: &'a Hook, steps: &[state::Step]) -> Result<Option<&'a Declaration>, String> {
-    let passed: Vec<&str> = steps
-        .iter()
-        .filter(|s| !s.blocked)
-        .map(|s| s.gate.as_str())
-        .collect();
     for declaration in &hook.gates {
-        if passed.contains(&declaration.gate.as_str()) || !applies(declaration)? {
+        if !applies(declaration)? || settled(declaration, steps)? {
             continue;
         }
         return Ok(Some(declaration));
     }
     Ok(None)
+}
+
+// The session the last reviewer reported. A runner that can resume one reads what changed, rather than sampling a rubric afresh every round.
+fn prior_session(declaration: &Declaration, steps: &[state::Step]) -> Option<String> {
+    let step = latest(&declaration.gate, steps)?;
+    let record = state::lookup(&step.token).ok()??;
+    let session = record.verdicts.first()?.session.clone();
+    Some(session).filter(|s| !s.is_empty())
 }
 
 // An intent may only change once a MAJOR has sent the work back; anywhere else a changed brief is the review leaking into what the next reviewer is told.
@@ -48,11 +67,12 @@ fn review(
     declaration: &Declaration,
     runner: &crate::runner::Runner,
     intent: &str,
+    prior: Option<String>,
 ) -> Result<(Vec<Verdict>, String), String> {
     let files = git::staged_existing(&declaration.paths)?;
     let brief = crate::brief::compose(declaration, Some(intent), &files)?;
-    report::reviewing(&declaration.gate);
-    let output = crate::runner::invoke(runner, &brief)?;
+    report::reviewing(&declaration.gate, prior.is_some());
+    let output = crate::runner::invoke(runner, &brief, prior.as_deref())?;
     let verdicts = crate::runner::verdicts(&output, declaration.brief.simple)?;
     Ok((verdicts, crate::runner::findings(&output)))
 }
@@ -60,7 +80,14 @@ fn review(
 fn trailers(hook: &Hook, steps: &[state::Step]) -> Result<Vec<String>, String> {
     let resets = state::resets()?;
     let mut lines = Vec::new();
-    for step in steps.iter().filter(|s| !s.blocked) {
+    // One line per gate, from its last verdict, and only where that verdict still describes what is staged: a superseded review and one whose files have left the commit both attest nothing about it.
+    for declaration in &hook.gates {
+        if !settled(declaration, steps)? {
+            continue;
+        }
+        let Some(step) = latest(&declaration.gate, steps) else {
+            continue;
+        };
         let Some(record) = state::lookup(&step.token)? else {
             continue;
         };
@@ -104,20 +131,6 @@ fn compose(intent: &str, trailers: &[String], resets: &[String]) -> String {
     message
 }
 
-// A verdict is evidence about the content its reviewer saw, and fixing what it named re-opens no gate. What moved since is said, not refused: silence lets a trailer claim more than its review covered.
-fn moved_since_review(hook: &Hook, steps: &[state::Step]) -> Result<Vec<String>, String> {
-    let mut moved = Vec::new();
-    for step in steps.iter().filter(|s| !s.blocked) {
-        let Some(declaration) = hook.gates.iter().find(|d| d.gate == step.gate) else {
-            continue;
-        };
-        if state::content_digest(&declaration.paths)? != step.content {
-            moved.push(step.gate.clone());
-        }
-    }
-    Ok(moved)
-}
-
 // Every staged path no gate read, with the reason. The two are not the same news: a gate declining to judge its own measure is the design; a path no pathspec reaches is a hole in the wiring.
 fn unreviewed(hook: &Hook, steps: &[state::Step]) -> Result<Vec<report::Unread>, String> {
     let mut unread = Vec::new();
@@ -147,7 +160,6 @@ fn unreviewed(hook: &Hook, steps: &[state::Step]) -> Result<Vec<report::Unread>,
 // Nothing hands a token to anyone: the last run writes the trailers itself, and the hook it triggers verifies them exactly as it would verify a commit made by hand.
 fn land(hook: &Hook, steps: &[state::Step], intent: &str) -> Result<bool, String> {
     let trailers = trailers(hook, steps)?;
-    report::moved(&moved_since_review(hook, steps)?);
     report::unreviewed(&unreviewed(hook, steps)?);
     let message = compose(intent, &trailers, &state::reasons()?);
     let out = git::commit(&message)?;
@@ -172,7 +184,8 @@ pub fn run(intent: &str) -> Result<bool, String> {
         return land(&hook, &steps, intent);
     };
     let runner = crate::runner::configured()?;
-    let (verdicts, findings) = review(declaration, &runner, intent)?;
+    let prior = prior_session(declaration, &steps);
+    let (verdicts, findings) = review(declaration, &runner, intent, prior)?;
     let blocked = verdicts.iter().any(Verdict::blocks);
     let content = state::content_digest(&declaration.paths)?;
     state::record(&declaration.gate, &verdicts, blocked, &content)?;

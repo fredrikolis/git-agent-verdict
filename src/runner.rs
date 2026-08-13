@@ -38,11 +38,18 @@ pub const MARKER: &str = "VERDICT:";
 // A refusal is not a count, so it is not a verdict shape: an advisory gate blocks on it exactly as a graded one does.
 pub const REFUSED: &str = "refused";
 
+// Handed to the next run through the environment, never as an argv: composing a resume flag here would pick one vendor's CLI for every repo.
+pub const PRIOR_SESSION: &str = "AGENT_VERDICT_PRIOR_SESSION";
+
 // Through a shell because the declaration is a command line a repo writes for itself, not an argv this tool composes.
-pub fn invoke(runner: &Runner, brief: &str) -> Result<String, String> {
-    let mut child = Command::new("sh")
-        .arg("-c")
-        .arg(&runner.cmd)
+pub fn invoke(runner: &Runner, brief: &str, prior: Option<&str>) -> Result<String, String> {
+    let mut command = Command::new("sh");
+    command.arg("-c").arg(&runner.cmd);
+    match prior {
+        Some(session) => command.env(PRIOR_SESSION, session),
+        None => command.env_remove(PRIOR_SESSION),
+    };
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()

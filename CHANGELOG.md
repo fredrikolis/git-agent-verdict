@@ -4,6 +4,12 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [1.3.0] - 2026-08-13
+
+### Changed
+- Fixing what a review named re-opens its gate: the next `attest` reviews it again.
+- `$AGENT_VERDICT_PRIOR_SESSION` reaches the runner, so it can resume the last reviewer.
+
 ## [1.2.0] - 2026-08-13
 
 ### Changed

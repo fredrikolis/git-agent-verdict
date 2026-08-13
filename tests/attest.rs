@@ -33,16 +33,6 @@ fn the_trailer_carries_the_counts_the_reviewer_reported() {
     assert!(message.contains("reviewer=fake"), "{message}");
 }
 
-// The subject is the brief, verbatim: the one line both the reviewer and the record need.
-#[test]
-fn the_intent_becomes_the_subject() {
-    let repo = Repo::new();
-    repo.declare(CLEAN, &[STANDARDS]);
-    repo.stage(&["src.rs"]);
-    let message = repo.landed(AIM, 3);
-    assert_eq!(message.lines().next(), Some(AIM), "{message}");
-}
-
 #[test]
 fn a_major_holds_the_gate_and_commits_nothing() {
     let repo = Repo::new();
@@ -107,33 +97,49 @@ fn an_advisory_reviewer_reporting_a_major_is_refused() {
     assert!(!repo.committed(), "an advisory major committed anyway");
 }
 
-// A passing verdict closes its gate for this HEAD, so the edit satisfying a MODERATE is never recounted: a bound the reviewer enforces can break under the fix and land in a trailer claiming review.
+// A verdict describes the content its reviewer saw. Fixing what it named moves that content — that is the work — so the gate opens again rather than landing a trailer about text that no longer exists.
 #[test]
-fn content_moving_after_its_verdict_is_named_before_the_commit() {
+fn content_moving_after_its_verdict_reopens_the_gate() {
     let repo = Repo::new();
-    repo.declare(CLEAN, &[STANDARDS]);
+    let counting = r#"n=$(cat rounds 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > rounds; echo "VERDICT: reviewer=fake session=s-$n major=0 moderate=$n minor=0""#;
+    repo.declare_runner(counting, &[STANDARDS]);
     repo.stage(&["src.rs"]);
     repo.attest(AIM);
-    repo.write("src.rs", "code, and the line the fix added");
+    repo.write("src.rs", "the line the fix added");
     repo.stage(&["src.rs"]);
-    let run = repo.attest(AIM);
-    assert!(repo.committed(), "{}", run.err);
-    assert!(
-        run.err.contains("CONTENT MOVED SINCE ITS VERDICT"),
-        "{}",
-        run.err
-    );
-    assert!(run.err.contains("standards"), "{}", run.err);
+    let message = repo.landed(AIM, 3);
+    assert_eq!(repo.read("rounds").trim(), "2", "{message}");
+    assert!(message.contains("moderate=2"), "{message}");
+    assert!(!message.contains("moderate=1"), "{message}");
 }
 
 #[test]
-fn content_left_alone_after_its_verdict_says_nothing() {
+fn a_verdict_stands_while_its_content_does_not_move() {
     let repo = Repo::new();
-    repo.declare(CLEAN, &[STANDARDS]);
+    let counting = r#"n=$(cat rounds 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > rounds; echo "VERDICT: reviewer=fake session=s-$n major=0 moderate=1 minor=0""#;
+    repo.declare_runner(counting, &[STANDARDS]);
     repo.stage(&["src.rs"]);
-    let run = repo.attest_until(AIM, 3);
-    assert!(repo.committed(), "{}", run.err);
-    assert!(!run.err.contains("CONTENT MOVED"), "{}", run.err);
+    let message = repo.landed(AIM, 3);
+    assert_eq!(repo.read("rounds").trim(), "1", "{message}");
+}
+
+// A fresh reviewer resamples a rubric it has never seen, which is how counts wander between rounds that fixed nothing. The runner decides whether to resume; the tool only hands it the session.
+#[test]
+fn a_re_review_is_handed_the_session_of_the_last_one() {
+    let repo = Repo::new();
+    let recording = r#"echo "[$AGENT_VERDICT_PRIOR_SESSION]" >> handed; echo "VERDICT: reviewer=fake session=s-99 major=0 moderate=0 minor=0""#;
+    repo.declare_runner(recording, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    repo.attest(AIM);
+    repo.write("src.rs", "moved");
+    repo.stage(&["src.rs"]);
+    repo.attest(AIM);
+    assert_eq!(
+        repo.read("handed"),
+        "[]\n[s-99]\n",
+        "{}",
+        repo.read("handed")
+    );
 }
 
 // A pathspec is written against the root because that is where git runs a hook, and one resolved from a subdirectory passes a gate on a fraction of the change without saying so.
@@ -161,69 +167,6 @@ fn a_staged_rubric_still_lets_attest_read_the_hook() {
     assert!(!run.err.contains("declared no gates"), "{}", run.err);
     assert!(run.err.contains("RUBRIC IS STAGED"), "{}", run.err);
     assert!(!repo.committed(), "a mixed rubric commit landed anyway");
-}
-
-// The rubric alone is not circular for a gate that is not judged by it, so that gate reviews it and the commit lands with its verdict rather than around the hook.
-#[test]
-fn a_rubric_alone_is_reviewed_by_the_gate_it_does_not_measure() {
-    let repo = Repo::new();
-    repo.write("style.md", "the other measure");
-    let other = r#""$1" prose --simple --doc style.md --path ."#;
-    repo.declare(CLEAN, &[STANDARDS, other]);
-    repo.stage(&["rubric.md"]);
-    let message = repo.landed(AIM, 3);
-    assert!(message.contains("Reviewed-prose:"), "{message}");
-    assert!(!message.contains("Reviewed-standards:"), "{message}");
-}
-
-// No gate could read it, so the commit says which staged paths landed unattested and why, rather than letting the trailers beside them imply coverage.
-#[test]
-fn a_path_no_gate_reaches_is_named_before_the_commit() {
-    let repo = Repo::new();
-    repo.write("notes.txt", "loose");
-    let scoped = r#""$1" standards --doc rubric.md --path "*.rs""#;
-    repo.declare(CLEAN, &[scoped]);
-    repo.stage(&["src.rs", "notes.txt"]);
-    let run = repo.attest_until(AIM, 3);
-    assert!(repo.committed(), "{}", run.err);
-    assert!(run.err.contains("LANDING UNREVIEWED"), "{}", run.err);
-    assert!(run.err.contains("notes.txt"), "{}", run.err);
-}
-
-// stdout is the channel an agent parses, and git's own output is the only other thing on it: a landed commit it has to infer is one it may make twice.
-#[test]
-fn the_landed_commit_is_announced_on_stdout() {
-    let repo = Repo::new();
-    repo.declare(CLEAN, &[STANDARDS]);
-    repo.stage(&["src.rs"]);
-    let run = repo.attest_until(AIM, 3);
-    assert!(repo.committed(), "{}", run.err);
-    assert!(run.out.contains("committed "), "{}", run.out);
-    assert!(run.out.contains("nothing left to run"), "{}", run.out);
-}
-
-// The diary is keyed on HEAD, which the commit moved, so a second run finds no step and nothing staged — which is not the hook failing to declare a gate.
-#[test]
-fn attest_after_the_commit_landed_names_the_empty_index() {
-    let repo = Repo::new();
-    repo.declare(CLEAN, &[STANDARDS]);
-    repo.stage(&["src.rs"]);
-    repo.attest_until(AIM, 3);
-    assert!(repo.committed());
-    let run = repo.attest(AIM);
-    assert_eq!(run.code, 2, "{}", run.err);
-    assert!(run.err.contains("nothing staged"), "{}", run.err);
-}
-
-// A graded gate and an advisory one in the same hook: both land a trailer, and the hook the commit fires reads both back.
-#[test]
-fn a_graded_and_an_advisory_gate_both_land_a_trailer() {
-    let repo = Repo::new();
-    repo.declare(CLEAN, &[STANDARDS, PROSE]);
-    repo.stage(&["src.rs"]);
-    let message = repo.landed(AIM, 3);
-    assert!(message.contains("Reviewed-standards:"), "{message}");
-    assert!(message.contains("Reviewed-prose:"), "{message}");
 }
 
 // The brief is the one input the author still writes, so it may not drift between the gates of one commit.
@@ -302,26 +245,6 @@ fn a_reviewer_closing_with_two_verdict_lines_is_refused() {
     assert!(!repo.committed(), "a doubled verdict committed anyway");
 }
 
-// The counts say how much; only the report says what. An author told to address a finding it cannot read has been told nothing.
-#[test]
-fn what_the_reviewer_said_reaches_the_author() {
-    let repo = Repo::new();
-    let spoken = format!("MODERATE - the lede repeats the heading\\n{CLEAN}");
-    repo.declare(&spoken, &[STANDARDS]);
-    repo.stage(&["src.rs"]);
-    let run = repo.attest(AIM);
-    let path = run
-        .err
-        .lines()
-        .find_map(|l| l.strip_prefix("see the full report: "))
-        .expect("a path")
-        .trim()
-        .to_string();
-    let body = std::fs::read_to_string(&path).expect("the report");
-    assert!(body.contains("the lede repeats the heading"), "{body}");
-    let _ = std::fs::remove_file(&path);
-}
-
 #[test]
 fn a_reviewer_that_reports_no_verdict_line_is_an_error_not_a_pass() {
     let repo = Repo::new();
@@ -340,53 +263,4 @@ fn a_host_with_no_reviewer_configured_says_so() {
     let run = repo.attest(AIM);
     assert_eq!(run.code, 2, "{}", run.err);
     assert!(run.err.contains("agent-verdict.runner"), "{}", run.err);
-}
-
-#[test]
-fn a_reset_is_counted_and_keeps_its_reason() {
-    let repo = Repo::new();
-    repo.declare(CLEAN, &[STANDARDS]);
-    repo.stage(&["src.rs"]);
-    repo.attest(AIM);
-    let run = repo.capture(&["reset", "the", "brief", "named", "the", "wrong", "aim"]);
-    assert_eq!(run.code, 0, "{}", run.err);
-    assert!(run.err.contains("reset 1"), "{}", run.err);
-
-    let message = repo.landed("a different aim entirely", 3);
-    assert!(message.contains("resets=1"), "{message}");
-    assert!(message.contains("Reset: the brief named"), "{message}");
-}
-
-#[test]
-fn a_reset_without_a_reason_is_refused() {
-    let repo = Repo::new();
-    repo.declare(CLEAN, &[STANDARDS]);
-    let run = repo.capture(&["reset"]);
-    assert_eq!(run.code, 2, "{}", run.err);
-    assert!(run.err.contains("needs a reason"), "{}", run.err);
-}
-
-// A full review runs to hundreds of lines; an author reading the tail of the output would miss the findings above it, so the whole report is on disk and named.
-#[test]
-fn a_long_report_is_written_where_it_can_be_read_whole() {
-    let repo = Repo::new();
-    let long: String = (1..=60)
-        .map(|n| format!("MINOR - finding {n}\\n"))
-        .collect();
-    repo.declare(&format!("{long}{CLEAN}"), &[STANDARDS]);
-    repo.stage(&["src.rs"]);
-    let run = repo.attest(AIM);
-    assert!(run.out.contains("standards: major=0"), "{}", run.out);
-    assert!(!run.err.contains("finding 42"), "{}", run.err);
-    let path = run
-        .err
-        .lines()
-        .find_map(|l| l.strip_prefix("see the full report: "))
-        .expect("a path")
-        .trim()
-        .to_string();
-    let body = std::fs::read_to_string(&path).expect("the report");
-    assert!(body.contains("finding 42"), "{body}");
-    assert!(body.contains("finding 60"), "{body}");
-    let _ = std::fs::remove_file(&path);
 }

@@ -119,8 +119,13 @@ pub fn logged(gate: &str, findings: &str) -> Option<std::path::PathBuf> {
     Some(path)
 }
 
-pub fn reviewing(gate: &str) {
-    eprintln!("git-agent-verdict: {gate}: reviewing…");
+pub fn reviewing(gate: &str, again: bool) {
+    let why = if again {
+        " again — the content changed since its last verdict"
+    } else {
+        ""
+    };
+    eprintln!("git-agent-verdict: {gate}: reviewing…{why}");
 }
 
 pub fn reviewed(
@@ -197,18 +202,6 @@ pub fn unreviewed(unread: &[Unread]) {
         eprintln!("\n  A path nothing reaches is wiring: widen a --path, or accept that this");
         eprintln!("  commit attests nothing about it.");
     }
-}
-
-// Named before the commit, not after: the trailer about to be written records what its reviewer saw, and this is every gate for which that is no longer what lands.
-pub fn moved(gates: &[String]) {
-    if gates.is_empty() {
-        return;
-    }
-    eprintln!("\ngit-agent-verdict: CONTENT MOVED SINCE ITS VERDICT\n");
-    eprintln!("  {}\n", gates.join("\n  "));
-    eprintln!("  - fixing what a review named does not re-open its gate, and nothing recounts");
-    eprintln!("  - a bound the reviewer enforces can be broken by the fix and land unchecked");
-    eprintln!("  - for a fresh review: git agent-verdict reset \"<why>\"");
 }
 
 pub fn reset_done(count: u32, reason: &str) {
