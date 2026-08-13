@@ -173,7 +173,7 @@ pub fn run(intent: &str) -> Result<bool, String> {
     };
     let runner = crate::runner::configured()?;
     let (verdicts, findings) = review(declaration, &runner, intent)?;
-    let blocked = !declaration.brief.simple && verdicts.iter().any(Verdict::blocks);
+    let blocked = verdicts.iter().any(Verdict::blocks);
     let content = state::content_digest(&declaration.paths)?;
     state::record(&declaration.gate, &verdicts, blocked, &content)?;
     let remaining = next(&hook, &state::progress()?)?.map(|d| d.gate.clone());

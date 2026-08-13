@@ -25,7 +25,7 @@ const GUIDE: &str = r#"WIRING A REPO — git-agent-verdict
      git agent-verdict "$1" my-standards-gate \
        --doc docs/standards.md --doc docs/annotations.md --path .
 
-     # Advisory: counts findings, never blocks. The shell expands $KB, so a rubric may live
+     # Advisory: same ladder, no MAJOR rung, never blocks. The shell expands $KB, so a rubric may live
      # outside the repo, where nothing can stage it.
      # `*.md` is a git pathspec, so it matches at any depth: this gate reads docs/standards.md
      # too, which is what leaves the standards rubric reviewed by someone when it changes alone.

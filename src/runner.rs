@@ -69,7 +69,7 @@ pub fn invoke(runner: &Runner, brief: &str) -> Result<String, String> {
 }
 
 fn counts_from(fields: &str, simple: bool) -> Result<Counts, String> {
-    let mut found: [Option<u32>; 4] = [None; 4];
+    let mut found: [Option<u32>; 3] = [None; 3];
     for field in fields.split_whitespace() {
         let Some((name, raw)) = field.split_once('=') else {
             continue;
@@ -78,7 +78,6 @@ fn counts_from(fields: &str, simple: bool) -> Result<Counts, String> {
             "major" => 0,
             "moderate" => 1,
             "minor" => 2,
-            "findings" => 3,
             _ => continue,
         };
         // Named but unreadable is not the same as absent: read as absent it would be reported as a missing field, sending the author after the wrong fault.
@@ -86,17 +85,30 @@ fn counts_from(fields: &str, simple: bool) -> Result<Counts, String> {
             format!("the reviewer's {MARKER} line has {name}={raw}, which is not a number")
         })?);
     }
-    match (simple, found) {
-        (true, [.., Some(findings)]) => Ok(Counts::Advisory { findings }),
-        (false, [Some(major), Some(moderate), Some(minor), _]) => Ok(Counts::Graded {
-            major,
+    // An advisory gate's brief never offers a MAJOR rung, so its reviewer is not asked for the count and the zero is recorded here. Reporting one anyway answers a brief it was not given.
+    if simple && found[0].is_some_and(|major| major > 0) {
+        return Err(
+            "this gate is advisory and has no MAJOR rung, but its reviewer reported major>0"
+                .to_string(),
+        );
+    }
+    if !simple && found[0].is_none() {
+        return Err(format!(
+            "the reviewer's {MARKER} line needs major=, moderate= and minor="
+        ));
+    }
+    match (found[1], found[2]) {
+        (Some(moderate), Some(minor)) => Ok(Counts {
+            major: found[0].unwrap_or(0),
             moderate,
             minor,
         }),
-        (true, _) => Err("the reviewer's VERDICT line carries no findings=".to_string()),
-        (false, _) => {
-            Err("the reviewer's VERDICT line needs major=, moderate= and minor=".to_string())
-        }
+        _ if simple => Err(format!(
+            "the reviewer's {MARKER} line needs moderate= and minor="
+        )),
+        _ => Err(format!(
+            "the reviewer's {MARKER} line needs major=, moderate= and minor="
+        )),
     }
 }
 

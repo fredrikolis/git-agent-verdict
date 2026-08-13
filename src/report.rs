@@ -3,7 +3,7 @@
 use crate::cli::Invocation;
 use crate::git;
 use crate::state;
-use crate::trailer::{self, counts_shape, key_for, Verdict};
+use crate::trailer::{self, key_for, Verdict, COUNTS_SHAPE};
 
 pub fn skipped(gate: &str, paths: &[String]) {
     eprintln!(
@@ -14,8 +14,7 @@ pub fn skipped(gate: &str, paths: &[String]) {
 
 fn shape(inv: &Invocation) -> String {
     let key = key_for(&inv.gate);
-    let counts = counts_shape(inv.brief.simple);
-    format!("{key}: reviewer=<id> {counts} token=<issued>")
+    format!("{key}: reviewer=<id> {COUNTS_SHAPE} token=<issued>")
 }
 
 // The remedy is one command: the tool runs the review itself, so nothing here asks the author to brief anyone.

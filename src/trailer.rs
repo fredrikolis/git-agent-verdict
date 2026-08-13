@@ -1,16 +1,11 @@
 // Concern: the verdict trailer's grammar — its key, its fields, what makes one blocking | Non-concern: obtaining the trailer block, or reporting a rejection | IO: (gate, block) -> verdicts
 
-// One shape per kind of gate: a blocking gate grades what it finds, an advisory one only counts it, and no trailer may carry both.
+// One ladder for every gate: an advisory one has no MAJOR rung and reports zero. A count that cannot reach zero gives a review no place to stop.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Counts {
-    Graded {
-        major: u32,
-        moderate: u32,
-        minor: u32,
-    },
-    Advisory {
-        findings: u32,
-    },
+pub struct Counts {
+    pub major: u32,
+    pub moderate: u32,
+    pub minor: u32,
 }
 
 // The session is evidence, not a claim: it names a transcript on one machine, so it is kept in the diary beside the counts and never published into a message.
@@ -23,95 +18,57 @@ pub struct Verdict {
 }
 
 impl Counts {
-    pub fn major(self) -> u32 {
-        match self {
-            Counts::Graded { major, .. } => major,
-            Counts::Advisory { .. } => 0,
-        }
-    }
-
     // Written the one way the grammar defines them, wherever they are read back: a trailer, a total, or a line an author is shown.
     pub fn render(self) -> String {
-        match self {
-            Counts::Graded {
-                major,
-                moderate,
-                minor,
-            } => format!("major={major} moderate={moderate} minor={minor}"),
-            Counts::Advisory { findings } => format!("findings={findings}"),
-        }
+        let Counts {
+            major,
+            moderate,
+            minor,
+        } = self;
+        format!("major={major} moderate={moderate} minor={minor}")
     }
 }
 
 impl Verdict {
     // major= alone. A MODERATE is fixed without a second look, so its count records what the reviewer found, not what is left outstanding — blocking on it would demand a re-review that no longer happens.
     pub fn blocks(&self) -> bool {
-        self.counts.major() > 0
+        self.counts.major > 0
     }
 }
 
-// A gate's verdicts all carry the shape its brief demanded, so their sum is one verdict's worth of counts in that same shape.
 pub fn total(verdicts: &[Verdict]) -> Counts {
-    verdicts
-        .iter()
-        .map(|v| v.counts)
-        .reduce(|a, b| match (a, b) {
-            (
-                Counts::Graded {
-                    major,
-                    moderate,
-                    minor,
-                },
-                Counts::Graded {
-                    major: m,
-                    moderate: d,
-                    minor: n,
-                },
-            ) => Counts::Graded {
-                major: major.saturating_add(m),
-                moderate: moderate.saturating_add(d),
-                minor: minor.saturating_add(n),
-            },
-            (Counts::Advisory { findings }, Counts::Advisory { findings: f }) => Counts::Advisory {
-                findings: findings.saturating_add(f),
-            },
-            (first, _) => first,
-        })
-        .unwrap_or(Counts::Graded {
+    verdicts.iter().map(|v| v.counts).fold(
+        Counts {
             major: 0,
             moderate: 0,
             minor: 0,
-        })
+        },
+        |a, b| Counts {
+            major: a.major.saturating_add(b.major),
+            moderate: a.moderate.saturating_add(b.moderate),
+            minor: a.minor.saturating_add(b.minor),
+        },
+    )
 }
 
-// The shape a brief demands back, and the shape a rejection shows the author: one gate, one set of field names.
-pub fn counts_shape(simple: bool) -> &'static str {
-    if simple {
-        "findings=<n>"
-    } else {
-        "major=<n> moderate=<n> minor=<n>"
-    }
-}
+// The shape a rejection shows the author, and the shape a blocking gate demands back.
+pub const COUNTS_SHAPE: &str = "major=<n> moderate=<n> minor=<n>";
+
+// An advisory gate is never asked for major=: it has no MAJOR rung, and the tool records the zero rather than asking a reviewer to type a constant.
+pub const ADVISORY_SHAPE: &str = "moderate=<n> minor=<n>";
 
 pub fn key_for(gate: &str) -> String {
     format!("Reviewed-{gate}")
 }
 
-fn counts_from(slots: [Option<u32>; 4]) -> Result<Counts, String> {
+fn counts_from(slots: [Option<u32>; 3]) -> Result<Counts, String> {
     match slots {
-        [Some(major), Some(moderate), Some(minor), None] => Ok(Counts::Graded {
+        [Some(major), Some(moderate), Some(minor)] => Ok(Counts {
             major,
             moderate,
             minor,
         }),
-        [None, None, None, Some(findings)] => Ok(Counts::Advisory { findings }),
-        [None, None, None, None] => {
-            Err("no counts: major=/moderate=/minor=, or findings=".to_string())
-        }
-        _ => Err(
-            "counts are either major=, moderate= and minor= together, or findings= alone"
-                .to_string(),
-        ),
+        _ => Err("counts are major=, moderate= and minor= together".to_string()),
     }
 }
 
@@ -120,8 +77,7 @@ fn slot_of(name: &str) -> Option<usize> {
         "major" => Some(0),
         "moderate" => Some(1),
         "minor" => Some(2),
-        "findings" => Some(3),
-        "resets" => Some(4),
+        "resets" => Some(3),
         _ => None,
     }
 }
@@ -129,7 +85,7 @@ fn slot_of(name: &str) -> Option<usize> {
 struct Fields {
     reviewer: Option<String>,
     token: Option<String>,
-    numbers: [Option<u32>; 5],
+    numbers: [Option<u32>; 4],
 }
 
 fn read_field(f: &mut Fields, field: &str) -> Result<(), String> {
@@ -163,7 +119,7 @@ fn parse_value(value: &str) -> Result<Verdict, String> {
     let mut fields = Fields {
         reviewer: None,
         token: None,
-        numbers: [None; 5],
+        numbers: [None; 4],
     };
     for field in value.split_whitespace() {
         read_field(&mut fields, field)?;
@@ -176,10 +132,10 @@ fn parse_value(value: &str) -> Result<Verdict, String> {
         .token
         .filter(|t| !t.is_empty())
         .ok_or("no token=: it is issued by `git agent-verdict attest`")?;
-    let [major, moderate, minor, findings, resets] = fields.numbers;
+    let [major, moderate, minor, resets] = fields.numbers;
     Ok(Verdict {
         reviewer,
-        counts: counts_from([major, moderate, minor, findings])?,
+        counts: counts_from([major, moderate, minor])?,
         token,
         resets: resets.unwrap_or(0),
         session: String::new(),
@@ -242,9 +198,8 @@ mod tests {
     }
 
     #[test]
-    fn the_two_count_shapes_cannot_be_mixed() {
-        let line =
-            "Reviewed-standards: reviewer=opus major=0 moderate=0 minor=0 findings=2 token=ab";
+    fn a_trailer_missing_a_rung_is_refused() {
+        let line = "Reviewed-standards: reviewer=opus major=0 moderate=0 token=ab";
         assert!(one(line).is_err());
     }
 

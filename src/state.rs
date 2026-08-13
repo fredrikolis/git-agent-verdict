@@ -74,15 +74,12 @@ fn serialize(verdicts: &[Verdict]) -> String {
     verdicts
         .iter()
         .map(|v| {
-            let counts = match v.counts {
-                Counts::Graded {
-                    major,
-                    moderate,
-                    minor,
-                } => format!("g:{major}:{moderate}:{minor}"),
-                Counts::Advisory { findings } => format!("a:{findings}"),
-            };
-            format!("{}\t{counts}\t{}", v.reviewer, v.session)
+            let Counts {
+                major,
+                moderate,
+                minor,
+            } = v.counts;
+            format!("{}\t{major}:{moderate}:{minor}\t{}", v.reviewer, v.session)
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -90,17 +87,11 @@ fn serialize(verdicts: &[Verdict]) -> String {
 
 fn counts_from(field: &str) -> Option<Counts> {
     let mut parts = field.split(':');
-    match parts.next()? {
-        "g" => Some(Counts::Graded {
-            major: parts.next()?.parse().ok()?,
-            moderate: parts.next()?.parse().ok()?,
-            minor: parts.next()?.parse().ok()?,
-        }),
-        "a" => Some(Counts::Advisory {
-            findings: parts.next()?.parse().ok()?,
-        }),
-        _ => None,
-    }
+    Some(Counts {
+        major: parts.next()?.parse().ok()?,
+        moderate: parts.next()?.parse().ok()?,
+        minor: parts.next()?.parse().ok()?,
+    })
 }
 
 fn deserialize(text: &str, token: &str) -> Option<Vec<Verdict>> {

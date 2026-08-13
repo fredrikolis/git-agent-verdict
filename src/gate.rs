@@ -155,9 +155,9 @@ pub fn check(inv: &Invocation) -> Result<bool, String> {
     if !traced(&inv.gate, &verdicts)? {
         return Ok(false);
     }
-    // A simple gate demands the review and records it; what the review found is the author's to act on, so no count of it is a blocker.
-    if !inv.brief.simple && verdicts.iter().any(Verdict::blocks) {
-        report::blocked(&inv.gate, trailer::total(&verdicts).major());
+    // An advisory gate reports major=0 by construction, so nothing here needs to know which kind of gate this is.
+    if verdicts.iter().any(Verdict::blocks) {
+        report::blocked(&inv.gate, trailer::total(&verdicts).major);
         return Ok(false);
     }
     report::attested(&inv.gate, verdicts.len(), &verdicts);

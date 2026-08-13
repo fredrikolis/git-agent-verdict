@@ -124,7 +124,7 @@ verify a commit written by hand.
 
 ```
 Reviewed-standards: reviewer=claude-opus-5 major=0 moderate=1 minor=3 token=6f1d…
-Reviewed-prose: reviewer=claude-opus-5 findings=2 token=b204…
+Reviewed-prose: reviewer=claude-opus-5 major=0 moderate=2 minor=0 token=b204…
 Reviewed-annotations: reviewer=claude-opus-5 major=0 moderate=0 minor=1 token=9ca7…
 ```
 
@@ -135,8 +135,10 @@ Scope is the gate's pathspec against the index, and the brief says so: it lists 
 under review and states there are no others. `reviewer=` is what the runner reported; the session id
 that names its transcript stays in the diary, unpushed, because a commit cannot be unpublished.
 
-An advisory gate carries `findings=` instead of three counts. Nothing it reports blocks, so a
-severity would buy nothing and cost the reviewer the attention the next defect needs.
+An advisory gate grades on the same ladder and has no MAJOR rung: it reports `major=0`, and nothing
+it finds blocks the commit. One count shape everywhere, and `major=` is the count that reaches zero.
+A gate whose only count cannot reach zero gives a review no place to stop, and the author decides
+when to stop by feel — which is how a review turns into rounds of taste.
 
 `token=` names the recorded review. The gate resolves it and compares the counts in the message
 against the ones the reviewer actually reported — the one check that catches a trailer reading

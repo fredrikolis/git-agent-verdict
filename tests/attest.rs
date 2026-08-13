@@ -83,14 +83,28 @@ fn gates_are_reviewed_in_the_order_the_hook_declares_them() {
 }
 
 #[test]
-fn an_advisory_gate_counts_findings_and_never_grades() {
+fn an_advisory_gate_grades_on_the_same_ladder_and_never_blocks() {
     let repo = Repo::new();
-    repo.declare("VERDICT: reviewer=fake session=s-03 findings=4", &[PROSE]);
+    repo.declare(
+        "VERDICT: reviewer=fake session=s-03 major=0 moderate=1 minor=3",
+        &[PROSE],
+    );
     repo.stage(&["src.rs"]);
     let message = repo.landed(AIM, 3);
     assert!(message.contains("Reviewed-prose:"), "{message}");
-    assert!(message.contains("findings=4"), "{message}");
-    assert!(!message.contains("major="), "{message}");
+    assert!(message.contains("major=0 moderate=1 minor=3"), "{message}");
+}
+
+// major= is the count that reaches zero, and an advisory gate has no MAJOR rung: a reviewer reporting one answered a brief it was not given.
+#[test]
+fn an_advisory_reviewer_reporting_a_major_is_refused() {
+    let repo = Repo::new();
+    repo.declare(BLOCKER, &[PROSE]);
+    repo.stage(&["src.rs"]);
+    let run = repo.attest(AIM);
+    assert_eq!(run.code, 2, "{}", run.err);
+    assert!(run.err.contains("no MAJOR rung"), "{}", run.err);
+    assert!(!repo.committed(), "an advisory major committed anyway");
 }
 
 // A passing verdict closes its gate for this HEAD, so the edit satisfying a MODERATE is never recounted: a bound the reviewer enforces can break under the fix and land in a trailer claiming review.
@@ -155,8 +169,7 @@ fn a_rubric_alone_is_reviewed_by_the_gate_it_does_not_measure() {
     let repo = Repo::new();
     repo.write("style.md", "the other measure");
     let other = r#""$1" prose --simple --doc style.md --path ."#;
-    let both = "VERDICT: reviewer=fake session=s-04 major=0 moderate=0 minor=0 findings=1";
-    repo.declare(both, &[STANDARDS, other]);
+    repo.declare(CLEAN, &[STANDARDS, other]);
     repo.stage(&["rubric.md"]);
     let message = repo.landed(AIM, 3);
     assert!(message.contains("Reviewed-prose:"), "{message}");
@@ -202,20 +215,15 @@ fn attest_after_the_commit_landed_names_the_empty_index() {
     assert!(run.err.contains("nothing staged"), "{}", run.err);
 }
 
-// The two shapes meet in one message, and the hook the commit fires reads both back: a graded trailer and an advisory one are the same commit's evidence.
+// A graded gate and an advisory one in the same hook: both land a trailer, and the hook the commit fires reads both back.
 #[test]
-fn a_graded_and_an_advisory_gate_land_their_own_shapes_in_one_commit() {
+fn a_graded_and_an_advisory_gate_both_land_a_trailer() {
     let repo = Repo::new();
-    let per_gate = r#"case "$(cat)" in *"gate: prose"*) printf 'VERDICT: reviewer=fake session=s-1 findings=3\n';; *) printf 'VERDICT: reviewer=fake session=s-2 major=0 moderate=1 minor=2\n';; esac"#;
-    repo.declare_runner(per_gate, &[STANDARDS, PROSE]);
+    repo.declare(CLEAN, &[STANDARDS, PROSE]);
     repo.stage(&["src.rs"]);
     let message = repo.landed(AIM, 3);
-    let graded = "Reviewed-standards: reviewer=fake major=0 moderate=1 minor=2";
-    assert!(message.contains(graded), "{message}");
-    assert!(
-        message.contains("Reviewed-prose: reviewer=fake findings=3"),
-        "{message}"
-    );
+    assert!(message.contains("Reviewed-standards:"), "{message}");
+    assert!(message.contains("Reviewed-prose:"), "{message}");
 }
 
 // The brief is the one input the author still writes, so it may not drift between the gates of one commit.

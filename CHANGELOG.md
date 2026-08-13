@@ -4,6 +4,23 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [1.2.0] - 2026-08-13
+
+### Changed
+- One count shape for every gate: `major moderate minor`. A gate whose only count cannot reach zero
+  gives a review no place to stop.
+- An advisory gate has no MAJOR rung. Its brief omits the rung and asks for `moderate=` and `minor=`
+  alone; the tool records the zero. A reviewer reporting `major>0` on one is refused.
+- `--simple` changes one thing now, and no longer reaches the blocking logic: an advisory gate
+  cannot produce a blocker by construction.
+- Each rung in the brief names what it costs the author: MAJOR (blocks the commit, and is reviewed
+  again), MODERATE (must fix, no re-review), MINOR (optional, fix or leave).
+- The reviewer's brief is written plainly — four numbered steps, one clause per line.
+
+### Removed
+- `findings=` from the trailer grammar.
+- `src/prompt-simple.md`. The two templates forked only over the counter.
+
 ## [1.1.0] - 2026-08-13
 
 ### Removed

@@ -125,14 +125,9 @@ impl Repo {
 
     // The reviewer is host configuration, set per clone here: a repo that declared one would pick an agent for every maintainer.
     pub fn declare(&self, verdict: &str, gates: &[&str]) {
-        let cmd = format!("printf '{verdict}\\n'");
-        self.declare_runner(&cmd, gates);
-    }
-
-    // The brief names its gate, so a runner that reads stdin can answer each one in its own shape.
-    pub fn declare_runner(&self, cmd: &str, gates: &[&str]) {
         self.hook(gates);
-        git(&self.dir, &["config", "agent-verdict.runner", cmd]);
+        let cmd = format!("printf '{verdict}\\n'");
+        git(&self.dir, &["config", "agent-verdict.runner", &cmd]);
     }
 
     // Run until it stops complaining, which is the whole protocol: the last run has no gate left and commits.
