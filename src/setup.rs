@@ -47,9 +47,15 @@ const GUIDE: &str = r#"WIRING A REPO — git-agent-verdict
      git config core.hooksPath .githooks
 
 3. Name the reviewer. Host configuration, not the repo's: maintainers do not share a machine, a
-   budget or a preferred agent. It reads a brief on stdin and closes with one VERDICT: line.
+   budget or a preferred agent. There is no default — unset, attest refuses rather than spending
+   on an agent nobody chose.
 
-     git config --global agent-verdict.runner "<command reading a brief on stdin>"
+     git config --global agent-verdict.runner "claude -p"
+
+   Any command that reads a brief on stdin and closes with one VERDICT: line will do; that one is
+   an example, not a dependency. It must report reviewer= and session= on the line, as the brief
+   asks. Wrapping it, pass the reviewer's own output through: the counts say how much was found,
+   and only that output says what.
 
 4. Commit through the tool, not through git:
 

@@ -47,10 +47,11 @@ Who reviews is **host** configuration, not the repo's — maintainers of one rep
 machine, a budget or a preferred agent:
 
 ```bash
-git config --global agent-verdict.runner "claude -p"     # the host's default
+git config --global agent-verdict.runner "claude -p"     # every repo on this machine
 git config --local  agent-verdict.runner "…"             # this clone only
 ```
 
+There is no default: unset, `attest` refuses rather than spending on an agent nobody chose.
 `claude -p` is one runtime among many. The tool composes no argv of its own and acquires no model,
 key or SDK: it runs that command line with the brief on stdin and reads the verdict back. The
 command must report `reviewer=` and `session=` on the VERDICT line, and the brief says so — a

@@ -4,6 +4,16 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [1.0.1] - 2026-08-13
+
+### Changed
+- Configuring the reviewer answers itself. The unset-runner error and `--repo-setup-guide` gave a
+  placeholder where the README gave `claude -p`, and neither said whether a default existed — so
+  establishing that none does meant reading the source. Both now name a concrete command and state
+  that unset means refused, not defaulted.
+- The README's `# the host's default` on that line meant global scope, and read as a claim that
+  `claude -p` is the default runner. It says `# every repo on this machine`.
+
 ## [1.0.0] - 2026-08-12
 
 First release with a compatibility promise. Everything below is breaking against 0.3.0, and the

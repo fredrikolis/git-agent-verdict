@@ -14,7 +14,11 @@ pub struct Runner {
 // Host configuration, not a repo's: a repo that declared its reviewer would pick one for every maintainer, and they do not share a machine, a budget or a preferred agent.
 pub fn configured() -> Result<Runner, String> {
     let cmd = git::config(RUNNER_KEY).ok_or_else(|| {
-        format!("no reviewer configured: git config --global {RUNNER_KEY} \"<command reading a brief on stdin>\"")
+        format!(
+            "no reviewer configured, and there is no default — unset, this refuses rather than spending on an agent nobody chose:\n  \
+             git config --global {RUNNER_KEY} \"claude -p\"\n\
+             Any command that reads a brief on stdin and closes with a {MARKER} line will do."
+        )
     })?;
     Ok(Runner { cmd })
 }
