@@ -19,7 +19,28 @@ fn auto_generated(raw: &str) -> bool {
     }
 }
 
-// The inverse verb: fire BECAUSE a yardstick is staged, and always refuse — judging a change to the measure against that same measure is circular.
+// Circularity is per gate: a gate cannot judge a change to its own measure, and a gate whose measure is untouched judges that change like any other.
+pub enum Measure {
+    Untouched,
+    // Its own rubric and nothing else in scope: there is no other change for this gate to judge, so it stands aside rather than refusing a commit that is only the measure.
+    Alone(Vec<String>),
+    // Its rubric alongside work it would have to judge against a measure that is moving.
+    Mixed(Vec<String>),
+}
+
+pub fn measure_state(docs: &[String], paths: &[String]) -> Result<Measure, String> {
+    let rubrics = staged_rubrics(docs)?;
+    if rubrics.is_empty() {
+        return Ok(Measure::Untouched);
+    }
+    let in_scope = git::staged(paths)?;
+    if in_scope.iter().all(|f| rubrics.contains(f)) {
+        return Ok(Measure::Alone(rubrics));
+    }
+    Ok(Measure::Mixed(rubrics))
+}
+
+// The inverse verb: fire BECAUSE a yardstick is staged.
 pub fn staged_rubrics(docs: &[String]) -> Result<Vec<String>, String> {
     let in_repo: Vec<String> = docs
         .iter()
@@ -45,16 +66,6 @@ fn drop_agent_coauthor(msg_file: &str, raw: &str) -> Result<String, String> {
     text.push('\n');
     std::fs::write(msg_file, &text).map_err(|e| format!("cannot rewrite {msg_file}: {e}"))?;
     Ok(text)
-}
-
-// Runs before any gate, so a rubric belonging to a LATER gate is caught without first paying for an earlier gate's review. The per-gate guard stays the backstop, so drift here only costs an early exit.
-pub fn rubric_guard(docs: &[String]) -> Result<bool, String> {
-    let rubrics = staged_rubrics(docs)?;
-    if rubrics.is_empty() {
-        return Ok(true);
-    }
-    report::preflight(&rubrics);
-    Ok(false)
 }
 
 // The counts in the message are compared against the ones the reviewer actually reported. This is the only check that can catch a trailer that reads better than its review did.
@@ -113,10 +124,16 @@ fn read_verdicts(inv: &Invocation) -> Result<Option<Vec<Verdict>>, String> {
 }
 
 pub fn check(inv: &Invocation) -> Result<bool, String> {
-    let rubrics = staged_rubrics(&inv.docs)?;
-    if !rubrics.is_empty() {
-        report::circular(&inv.gate, &rubrics);
-        return Ok(false);
+    match measure_state(&inv.docs, &inv.paths)? {
+        Measure::Alone(rubrics) => {
+            report::abstained(&inv.gate, &rubrics);
+            return Ok(true);
+        }
+        Measure::Mixed(rubrics) => {
+            report::circular(&inv.gate, &rubrics);
+            return Ok(false);
+        }
+        Measure::Untouched => {}
     }
     let unmatched = git::unmatched_literals(&inv.paths)?;
     if !unmatched.is_empty() {

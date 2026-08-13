@@ -4,6 +4,19 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [1.1.0] - 2026-08-13
+
+### Removed
+- `--rubric-guard`: took `--doc` and no `--path`, so it refused a measure-only commit as readily as
+  a mixed one. A hook still carrying it fails on an unknown flag.
+
+### Changed
+- Circularity is per gate. A rubric staged alone lands, and any gate whose `--path` reaches it still
+  reviews it. Mixed with work is still refused, now before a review is paid for.
+- `attest` names every staged path no gate read, and which reason: a gate stood aside as judged by
+  it, or no `--path` reaches it.
+- A mixed rubric commit is remedied by staging the rubric alone, not `git commit --no-verify`.
+
 ## [1.0.1] - 2026-08-13
 
 ### Changed

@@ -15,8 +15,6 @@ mod trailer;
 use cli::Mode;
 use std::process::ExitCode;
 
-pub const GUARD_LABEL: &str = "rubric-guard";
-
 fn fields(version: &str, what: &str) -> Result<Vec<u32>, String> {
     version
         .split('.')
@@ -111,7 +109,6 @@ fn main() -> ExitCode {
         Mode::Gate(inv) => (inv.gate.as_str(), gate::check(inv)),
         Mode::Attest(intent) => ("attest", attest::run(intent)),
         Mode::Reset(reason) => ("reset", attest::reset(reason)),
-        Mode::RubricGuard(docs) => (GUARD_LABEL, gate::rubric_guard(docs)),
         Mode::ReviewerPrompt(gate) => ("reviewer-prompt", reviewer_prompt(gate)),
         Mode::RequireVersion(want) => ("require-version", require_version(want)),
         Mode::RepoSetupGuide => ("repo-setup-guide", {

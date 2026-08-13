@@ -137,17 +137,44 @@ fn a_gate_reviews_the_same_files_from_any_directory() {
     assert!(from_sub.out.contains("src.rs"), "{}", from_sub.out);
 }
 
-// Enumerating the hook must not fire its guards: under `set -e` the refusal kills the hook, and every gate below it leaves the listing — the guard reported as a hook that declares nothing.
+// Enumerating the hook must not act on it: under `set -e` a mode that refuses during the listing kills the hook, and every gate below it leaves the listing.
 #[test]
 fn a_staged_rubric_still_lets_attest_read_the_hook() {
     let repo = Repo::new();
-    let guard = r#"--rubric-guard --doc rubric.md"#;
-    repo.declare(CLEAN, &[guard, STANDARDS]);
+    repo.declare(CLEAN, &[STANDARDS]);
     repo.stage(&["src.rs", "rubric.md"]);
     let run = repo.attest(AIM);
     assert!(!run.err.contains("declared no gates"), "{}", run.err);
     assert!(run.err.contains("RUBRIC IS STAGED"), "{}", run.err);
-    assert!(!repo.committed(), "a staged rubric committed anyway");
+    assert!(!repo.committed(), "a mixed rubric commit landed anyway");
+}
+
+// The rubric alone is not circular for a gate that is not judged by it, so that gate reviews it and the commit lands with its verdict rather than around the hook.
+#[test]
+fn a_rubric_alone_is_reviewed_by_the_gate_it_does_not_measure() {
+    let repo = Repo::new();
+    repo.write("style.md", "the other measure");
+    let other = r#""$1" prose --simple --doc style.md --path ."#;
+    let both = "VERDICT: reviewer=fake session=s-04 major=0 moderate=0 minor=0 findings=1";
+    repo.declare(both, &[STANDARDS, other]);
+    repo.stage(&["rubric.md"]);
+    let message = repo.landed(AIM, 3);
+    assert!(message.contains("Reviewed-prose:"), "{message}");
+    assert!(!message.contains("Reviewed-standards:"), "{message}");
+}
+
+// No gate could read it, so the commit says which staged paths landed unattested and why, rather than letting the trailers beside them imply coverage.
+#[test]
+fn a_path_no_gate_reaches_is_named_before_the_commit() {
+    let repo = Repo::new();
+    repo.write("notes.txt", "loose");
+    let scoped = r#""$1" standards --doc rubric.md --path "*.rs""#;
+    repo.declare(CLEAN, &[scoped]);
+    repo.stage(&["src.rs", "notes.txt"]);
+    let run = repo.attest_until(AIM, 3);
+    assert!(repo.committed(), "{}", run.err);
+    assert!(run.err.contains("LANDING UNREVIEWED"), "{}", run.err);
+    assert!(run.err.contains("notes.txt"), "{}", run.err);
 }
 
 // stdout is the channel an agent parses, and git's own output is the only other thing on it: a landed commit it has to infer is one it may make twice.

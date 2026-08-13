@@ -21,21 +21,21 @@ const GUIDE: &str = r#"WIRING A REPO — git-agent-verdict
      # The compatibility line these flags are written against.
      git agent-verdict --require-version {{line}}
 
-     # Refuses a commit that stages a rubric: judging a change to the measure against that same
-     # measure is circular. IN-REPO docs only — one outside the worktree can never be staged.
-     git agent-verdict --rubric-guard --doc docs/standards.md --doc docs/annotations.md
-
      # Graded, and blocks on major=. One gate may be judged against several rubrics.
      git agent-verdict "$1" my-standards-gate \
        --doc docs/standards.md --doc docs/annotations.md --path .
 
      # Advisory: counts findings, never blocks. The shell expands $KB, so a rubric may live
-     # outside the repo — nothing there is ever staged, so the guard above does not name it.
-     git agent-verdict "$1" readme-prose-gate --simple \
-       --doc "$KB/writing-style.md" --path README.md
+     # outside the repo, where nothing can stage it.
+     # `*.md` is a git pathspec, so it matches at any depth: this gate reads docs/standards.md
+     # too, which is what leaves the standards rubric reviewed by someone when it changes alone.
+     git agent-verdict "$1" prose-gate --simple \
+       --doc "$KB/writing-style.md" --path "*.md"
 
      # Line order is review order: a later gate is never judged against what an earlier one is
      # still changing. Gate names are repo-chosen labels, and reach the trailer as Reviewed-<name>.
+     # A gate stands aside when its own rubric is the whole of what is staged, so let some other
+     # gate's --path cover your rubrics — attest names every staged file no gate read.
 
    chmod +x .githooks/commit-msg
 

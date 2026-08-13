@@ -1,14 +1,19 @@
 // Concern: driving a commit to a full set of verdicts — which gate runs next | Non-concern: the trailer's grammar, or how a gate is later checked | IO: (intent) -> reviews, commit
 
 use crate::declarations::{self, Declaration, Hook};
+use crate::gate;
 use crate::git;
 use crate::report;
 use crate::state;
 use crate::trailer::{self, Verdict};
 
-// A gate with nothing staged is not part of this commit, exactly as the gate itself decides when the hook runs.
+// A gate with nothing staged is not part of this commit, and neither is one whose own measure is the whole of what is staged — exactly as the gate itself decides when the hook runs.
 fn applies(declaration: &Declaration) -> Result<bool, String> {
-    Ok(!git::staged(&declaration.paths)?.is_empty())
+    if git::staged(&declaration.paths)?.is_empty() {
+        return Ok(false);
+    }
+    let state = gate::measure_state(&declaration.docs, &declaration.paths)?;
+    Ok(!matches!(state, gate::Measure::Alone(_)))
 }
 
 // Line order is review order, and a later gate must never be judged against content an earlier one is still changing: the position is held here so nothing has to sequence it by hand.
@@ -69,6 +74,13 @@ fn trailers(hook: &Hook, steps: &[state::Step]) -> Result<Vec<String>, String> {
         if git::staged(&[])?.is_empty() {
             return Err("nothing staged: nothing to review, nothing to commit".to_string());
         }
+        // A commit that is only the measure carries no verdict: no gate can judge it without judging it by itself, and there is nothing else here to judge.
+        for declaration in &hook.gates {
+            let state = gate::measure_state(&declaration.docs, &declaration.paths)?;
+            if matches!(state, gate::Measure::Alone(_)) {
+                return Ok(lines);
+            }
+        }
         return Err(format!(
             "{} declared no gate this commit reaches",
             hook.path
@@ -82,6 +94,9 @@ fn compose(intent: &str, trailers: &[String], resets: &[String]) -> String {
     let mut message = format!("{intent}\n");
     for reason in resets {
         message.push_str(&format!("\nReset: {reason}\n"));
+    }
+    if trailers.is_empty() {
+        return message;
     }
     message.push('\n');
     message.push_str(&trailers.join("\n"));
@@ -103,10 +118,37 @@ fn moved_since_review(hook: &Hook, steps: &[state::Step]) -> Result<Vec<String>,
     Ok(moved)
 }
 
+// Every staged path no gate read, with the reason. The two are not the same news: a gate declining to judge its own measure is the design; a path no pathspec reaches is a hole in the wiring.
+fn unreviewed(hook: &Hook, steps: &[state::Step]) -> Result<Vec<report::Unread>, String> {
+    let mut unread = Vec::new();
+    for file in git::staged(&[])? {
+        let mut judged_by = None;
+        let mut reviewed = false;
+        for declaration in &hook.gates {
+            if !git::staged(&declaration.paths)?.contains(&file) {
+                continue;
+            }
+            if steps
+                .iter()
+                .any(|s| !s.blocked && s.gate == declaration.gate)
+            {
+                reviewed = true;
+                break;
+            }
+            judged_by = Some(declaration.gate.clone());
+        }
+        if !reviewed {
+            unread.push(report::Unread { file, judged_by });
+        }
+    }
+    Ok(unread)
+}
+
 // Nothing hands a token to anyone: the last run writes the trailers itself, and the hook it triggers verifies them exactly as it would verify a commit made by hand.
 fn land(hook: &Hook, steps: &[state::Step], intent: &str) -> Result<bool, String> {
     let trailers = trailers(hook, steps)?;
     report::moved(&moved_since_review(hook, steps)?);
+    report::unreviewed(&unreviewed(hook, steps)?);
     let message = compose(intent, &trailers, &state::reasons()?);
     let out = git::commit(&message)?;
     report::committed(&trailers, &out);
@@ -115,12 +157,14 @@ fn land(hook: &Hook, steps: &[state::Step], intent: &str) -> Result<bool, String
 
 pub fn run(intent: &str) -> Result<bool, String> {
     let hook = declarations::read()?;
-    // The hook's preflight refuses this at commit time regardless; attest is what pays for the reviews in between, so it asks first.
-    let docs: Vec<String> = hook.gates.iter().flat_map(|d| d.docs.clone()).collect();
-    let rubrics = crate::gate::staged_rubrics(&docs)?;
-    if !rubrics.is_empty() {
-        report::preflight(&rubrics);
-        return Ok(false);
+    // The gate refuses a mixed commit at commit time regardless, and attest pays for the reviews in between — so it asks first, per gate, since only the gate whose measure is moving cannot judge.
+    for declaration in &hook.gates {
+        if let gate::Measure::Mixed(rubrics) =
+            gate::measure_state(&declaration.docs, &declaration.paths)?
+        {
+            report::circular(&declaration.gate, &rubrics);
+            return Ok(false);
+        }
     }
     let steps = state::progress()?;
     hold_intent(intent, &steps)?;

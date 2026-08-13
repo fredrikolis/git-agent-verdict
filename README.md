@@ -31,12 +31,10 @@ wiring is the maintainer's to fix, and the agent hitting it has no other way to 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
-git agent-verdict --require-version 1.0
-git agent-verdict --rubric-guard \
-  --doc docs/repo-standards.md --doc docs/annotation-guide.md --doc docs/communication-style.md
+git agent-verdict --require-version 1.1
 git agent-verdict "$1" standards   --doc docs/repo-standards.md --path .
 git agent-verdict "$1" annotations --simple --doc docs/annotation-guide.md --path .
-git agent-verdict "$1" prose       --simple --doc docs/communication-style.md --path README.md
+git agent-verdict "$1" prose       --simple --doc docs/communication-style.md --path "*.md"
 ```
 
 Gate names are repo-chosen labels, not keywords. Line order is review order, and `attest` takes them
@@ -66,7 +64,7 @@ Each line is the whole declaration of its gate, which is what lets the tool brie
 as that gate will judge — it re-runs this hook to read the declarations rather than keeping a second
 copy in a config file.
 
-A pin, not a floor. `1.0` names a compatibility line: every additive `1.x` satisfies it, and `2.0.0`
+A pin, not a floor. `1.1` names a compatibility line: every additive `1.x` satisfies it, and `2.0.0`
 will not, because a major release may take a flag away or change what a trailer must carry. A hook
 written against the old grammar cannot tell on its own, and finds out when a commit dies on an
 unknown flag. Both directions are refused: too old cannot answer what the hook asks, and a later
@@ -85,13 +83,14 @@ tries to commit. The commit fails by design, and the gate prints one command.
 $ git commit -m "…"
 git-agent-verdict: standards: REVIEW GATE FAILED
 
-MISSING — the message needs this trailer and has none
+  missing: the message needs this trailer and has none
+  wanted:  Reviewed-standards: reviewer=<id> major=<n> moderate=<n> minor=<n> token=<issued>
 
-  Reviewed-standards: reviewer=<id> major=<n> moderate=<n> minor=<n> token=<issued>
+  git agent-verdict attest --intent "<the aim, one flat line>"
 
-Earned by a review this tool runs for you:
-
-  git agent-verdict attest --intent "<the aim of the change, in one flat line>"
+  - runs each gate in turn, records what the reviewer reported
+  - commits once every gate is attested
+  - composes the message from --intent; this message file is discarded
 ```
 
 `attest` reviews the next gate itself, records what the reviewer reported, and says what to fix. Run
@@ -104,7 +103,7 @@ standards: major=0 moderate=1 minor=1
 
 see the full report: ~/.agent-verdicts/my-repo-3f9a1c04/4da9793…-1-standards.log
 
-Address what it found, then run attest again for the annotations gate.
+next: address the findings, then attest again for the annotations gate
 ```
 
 **Nothing is handed to the agent to forward.** The brief goes from the tool to the reviewer, and the
@@ -196,10 +195,12 @@ tried before this one, both of which never settled:
 
 ## Two behaviours worth knowing
 
-**It refuses a commit that stages its own rubric.** Judging a change to the measure against that same
-measure is circular, so a `--doc` file lands alone via `--no-verify`. This is the one place the tool
-refuses rather than verifies, and it lives here because the list of rubrics IS the list of `--doc`
-paths — a copy in bash would be free to drift from it.
+**A gate stands aside from its own rubric.** Judging a change to the measure against that same
+measure is circular, so a gate whose `--doc` is the whole of what is staged does not review it —
+while any gate whose `--path` reaches that file still does, since another gate's measure is not
+moving. Staged alongside work, it is refused instead: stage the rubric alone and attest. `--path`
+is a git pathspec, so `*.md` matches at any depth and covers `docs/` too — `attest` names every
+staged path no gate read, and why.
 
 **It removes a `Co-authored-by:` trailer whose address is `@anthropic.com`.** Every commit in a repo
 gated this way is agent-written, so a fixed attribution line is constant and carries nothing, while

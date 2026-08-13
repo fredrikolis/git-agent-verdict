@@ -5,7 +5,6 @@ pub const USAGE: &str = concat!(
     "                         --doc <path>... --path <pathspec>...\n",
     "       git-agent-verdict attest --intent <one line>\n",
     "       git-agent-verdict reset <reason>\n",
-    "       git-agent-verdict --rubric-guard --doc <path>...\n",
     "       git-agent-verdict --reviewer-prompt <gate>\n",
     "       git-agent-verdict --require-version <major.minor>\n",
     "       git-agent-verdict --repo-setup-guide"
@@ -34,18 +33,16 @@ pub struct Invocation {
     pub brief: Brief,
 }
 
-// The preflight needs neither the message nor a gate, so it is a flag-only mode rather than a gate that ignores half its arguments.
 pub enum Mode {
     Gate(Box<Invocation>),
     Attest(String),
     Reset(String),
-    RubricGuard(Vec<String>),
     ReviewerPrompt(String),
     RequireVersion(String),
     RepoSetupGuide,
 }
 
-// Resolved once, here: the reviewer block promises absolute paths, and a path that does not resolve exempts itself in silence — a doc from the rubric guards, an override from the template it meant to replace.
+// Resolved once, here: the reviewer block promises absolute paths, and a path that does not resolve exempts itself in silence — a doc from its gate, an override from the template it replaces.
 fn canonical(flag: &str, path: &str) -> Result<String, String> {
     std::fs::canonicalize(path)
         .map(|p| p.to_string_lossy().into_owned())
@@ -70,7 +67,6 @@ fn canonical_docs(docs: &[String]) -> Result<Vec<String>, String> {
 #[derive(Default)]
 struct Parsed {
     positional: Vec<String>,
-    guard: bool,
     reviewer_prompt: Option<String>,
     require_version: Option<String>,
     setup_guide: bool,
@@ -86,7 +82,6 @@ fn collect(args: impl Iterator<Item = String>) -> Result<Parsed, String> {
     let mut args = args;
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--rubric-guard" => p.guard = true,
             "--repo-setup-guide" => p.setup_guide = true,
             "--reviewer-prompt" => {
                 p.reviewer_prompt = Some(args.next().ok_or("--reviewer-prompt needs a gate name")?);
@@ -112,7 +107,6 @@ fn collect(args: impl Iterator<Item = String>) -> Result<Parsed, String> {
 // Each mode names what it takes; anything else given is a mistyped invocation rather than a mode, and saying so beats acting on half of it.
 fn only(detail: &str, p: &Parsed, takes: &[&str]) -> Result<(), String> {
     let given = [
-        ("--rubric-guard", p.guard),
         ("--repo-setup-guide", p.setup_guide),
         ("--reviewer-prompt", p.reviewer_prompt.is_some()),
         ("--require-version", p.require_version.is_some()),
@@ -198,14 +192,9 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Mode, String> {
         only(detail, &p, &["--reviewer-prompt"])?;
         return Ok(Mode::ReviewerPrompt(gate));
     }
-    // A preflight guarding nothing is a hook that has silently stopped guarding, so an empty list is an error in both modes rather than a vacuous pass.
+    // A gate judging against nothing is a gate that has silently stopped judging, so an empty list is an error rather than a vacuous pass.
     if p.docs.is_empty() {
         return Err("at least one --doc is required".to_string());
-    }
-    if p.guard {
-        let detail = "--rubric-guard reads the index alone: it demands no review, so no <msg-file>, <gate>, --path, --simple or --override-prompt";
-        only(detail, &p, &["--rubric-guard", "--doc"])?;
-        return Ok(Mode::RubricGuard(canonical_docs(&p.docs)?));
     }
     let [msg_file, gate] = <[String; 2]>::try_from(p.positional).map_err(|got| {
         format!(

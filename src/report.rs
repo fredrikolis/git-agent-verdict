@@ -29,21 +29,21 @@ pub fn missing(inv: &Invocation, detail: &str) {
     eprintln!("  - composes the message from --intent; this message file is discarded");
 }
 
-fn refused(label: &str, judged_by: &str, rubrics: &[String]) {
-    eprintln!("\ngit-agent-verdict: {label}: RUBRIC IS STAGED\n");
+pub fn circular(gate: &str, rubrics: &[String]) {
+    eprintln!("\ngit-agent-verdict: {gate}: RUBRIC IS STAGED\n");
     eprintln!("  {}\n", rubrics.join("\n  "));
-    eprintln!("  circular: {judged_by} judges against a measure this commit changes");
-    eprintln!("  - land it alone, unreviewed: git commit --no-verify");
+    eprintln!("  circular: the {gate} review judges against a measure this commit changes");
+    eprintln!("  - stage the rubric alone and attest: {gate} stands aside, and any gate whose");
+    eprintln!("    --path reaches it still reviews it");
     eprintln!("  - every other change stays in its own commit, and still needs its review");
 }
 
-pub fn circular(gate: &str, rubrics: &[String]) {
-    refused(gate, &format!("the {gate} review"), rubrics);
-}
-
-// The preflight names no gate: it holds the whole hook's rubrics, and the staged one may belong to any of them.
-pub fn preflight(rubrics: &[String]) {
-    refused(crate::GUARD_LABEL, "a review in this hook", rubrics);
+// Not a refusal: its measure is the whole of what is staged, so there is no other change for this gate to judge and nothing to separate the rubric from.
+pub fn abstained(gate: &str, rubrics: &[String]) {
+    eprintln!(
+        "git-agent-verdict: {gate}: stood aside — the commit is only its measure ({})",
+        rubrics.join(", ")
+    );
 }
 
 fn summarize(verdicts: &[Verdict]) -> String {
@@ -159,9 +159,44 @@ pub fn committed(trailers: &[String], out: &str) {
         git::head_sha()
     );
     print!("{out}");
+    if trailers.is_empty() {
+        eprintln!("  no verdict: no gate read this commit — see above for which, and why");
+        return;
+    }
     // The counts reach the message from the diary rather than from whoever read the review, and nothing in between could have retyped them.
     for line in trailers {
         eprintln!("  {line}");
+    }
+}
+
+// A staged path no gate read, and which of the two reasons it was.
+pub struct Unread {
+    pub file: String,
+    // The gate that covers it and is judged by it, where one does: it stood aside rather than measuring a change to its own measure.
+    pub judged_by: Option<String>,
+}
+
+// A trailer says what a gate read, never what it did not: without this, the paths nothing reached look covered by the verdicts beside them.
+pub fn unreviewed(unread: &[Unread]) {
+    if unread.is_empty() {
+        return;
+    }
+    let width = unread.iter().map(|u| u.file.len()).max().unwrap_or(0);
+    eprintln!("\ngit-agent-verdict: LANDING UNREVIEWED\n");
+    for u in unread {
+        let why = match &u.judged_by {
+            Some(gate) => format!("{gate} is judged by it, and stood aside"),
+            None => "no gate's --path reaches it".to_string(),
+        };
+        eprintln!("  {:width$}  {why}", u.file);
+    }
+    if unread.iter().any(|u| u.judged_by.is_some()) {
+        eprintln!("\n  Standing aside is the design: a gate cannot measure a change to its own");
+        eprintln!("  measure. Another gate's --path may still cover it — none here does.");
+    }
+    if unread.iter().any(|u| u.judged_by.is_none()) {
+        eprintln!("\n  A path nothing reaches is wiring: widen a --path, or accept that this");
+        eprintln!("  commit attests nothing about it.");
     }
 }
 

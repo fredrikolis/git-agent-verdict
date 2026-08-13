@@ -104,67 +104,26 @@ fn staging_a_rubric_refuses_the_commit() {
     assert!(out.contains("RUBRIC IS STAGED"), "{out}");
 }
 
+// A gate stands aside when its own rubric is the whole of what is staged: there is no other change for it to judge, and nothing to keep the rubric separate from.
 #[test]
-fn the_preflight_refuses_a_staged_rubric_and_names_it() {
+fn a_gate_whose_rubric_is_the_whole_commit_stands_aside() {
     let repo = Repo::new();
-    repo.write("later-rubric.md", "the other standard");
-    repo.stage(&["src.rs", "later-rubric.md"]);
-    let args = [
-        "--rubric-guard",
-        "--doc",
-        "rubric.md",
-        "--doc",
-        "later-rubric.md",
-    ];
-    let (code, out) = repo.bare(&args);
-    assert_eq!(code, 1, "{out}");
-    assert!(out.contains("RUBRIC IS STAGED"), "{out}");
-    assert!(out.contains("later-rubric.md"), "{out}");
-    assert!(!out.contains("\n  rubric.md"), "{out}");
-    assert!(out.contains("--no-verify"), "{out}");
+    repo.stage(&["rubric.md"]);
+    let (code, out) = repo.standards(DUMMY);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("stood aside"), "{out}");
+    assert!(!out.contains("RUBRIC IS STAGED"), "{out}");
 }
 
+// It took --doc and no --path, so it could not tell a commit that is only the measure from one burying work behind it, and refused the commit attest now composes.
 #[test]
-fn the_preflight_passes_silently_when_no_rubric_is_staged() {
+fn the_retired_rubric_guard_is_an_unknown_flag() {
     let repo = Repo::new();
     repo.stage(&["src.rs"]);
     let (code, out) = repo.bare(&["--rubric-guard", "--doc", "rubric.md"]);
-    assert_eq!(code, 0, "{out}");
-    assert!(out.is_empty(), "{out}");
-}
-
-#[test]
-fn the_preflight_is_a_no_op_for_a_doc_outside_the_worktree() {
-    let repo = Repo::new();
-    repo.stage(&["src.rs", "rubric.md"]);
-    let outside = repo.outside_doc();
-    let (code, out) = repo.bare(&["--rubric-guard", "--doc", outside.to_str().expect("utf-8")]);
-    assert_eq!(code, 0, "{out}");
-    assert!(out.is_empty(), "{out}");
-}
-
-#[test]
-fn the_preflight_rejects_arguments_its_mode_cannot_use() {
-    let repo = Repo::new();
-    repo.stage(&["src.rs", "rubric.md"]);
-    let bad: [&[&str]; 5] = [
-        &["--rubric-guard"],
-        &["--rubric-guard", "--doc", "rubric.md", "--path", "."],
-        &["--rubric-guard", "--doc", "rubric.md", "--simple"],
-        &[
-            "--rubric-guard",
-            "--doc",
-            "rubric.md",
-            "--override-prompt",
-            "rubric.md",
-        ],
-        &["--rubric-guard", "MSG", "standards", "--doc", "rubric.md"],
-    ];
-    for args in bad {
-        let (code, out) = repo.bare(args);
-        assert_eq!(code, 2, "{args:?}: {out}");
-        assert!(out.contains("usage:"), "{args:?}: {out}");
-    }
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("unknown flag '--rubric-guard'"), "{out}");
+    assert!(out.contains("core.hooksPath"), "{out}");
 }
 
 // Scanned across the whole line, an info flag exits 0 wherever it appears: a stray one in a gate's declaration passes the gate having checked nothing.
