@@ -63,8 +63,13 @@ impl Repo {
 
     // Sealed off from the host's own git config: a test that inherited `agent-verdict.runner` would call the real reviewer, cost real money, and pass for the wrong reason.
     pub fn capture(&self, args: &[&str]) -> Run {
+        self.capture_in(".", args)
+    }
+
+    // Where the caller stands is not where a hook's paths are written from: an agent runs attest from wherever it happens to be.
+    pub fn capture_in(&self, subdir: &str, args: &[&str]) -> Run {
         let out = Command::new(BIN)
-            .current_dir(&self.dir)
+            .current_dir(self.dir.join(subdir))
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .args(args)
@@ -105,7 +110,8 @@ impl Repo {
         let hooks = self.dir.join("hooks");
         std::fs::create_dir_all(&hooks).expect("hooks dir");
         let path = hooks.join("commit-msg");
-        std::fs::write(&path, format!("#!/bin/sh\n{body}")).expect("place hook");
+        // `set -e`, as the setup guide writes it: without it a refusing line lets the rest of the hook run, and no test sees what a real hook does.
+        std::fs::write(&path, format!("#!/bin/sh\nset -e\n{body}")).expect("place hook");
         let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
         std::fs::set_permissions(&path, mode).expect("chmod");
         git(&self.dir, &["config", "core.hooksPath", "hooks"]);
@@ -119,9 +125,14 @@ impl Repo {
 
     // The reviewer is host configuration, set per clone here: a repo that declared one would pick an agent for every maintainer.
     pub fn declare(&self, verdict: &str, gates: &[&str]) {
-        self.hook(gates);
         let cmd = format!("printf '{verdict}\\n'");
-        git(&self.dir, &["config", "agent-verdict.runner", &cmd]);
+        self.declare_runner(&cmd, gates);
+    }
+
+    // The brief names its gate, so a runner that reads stdin can answer each one in its own shape.
+    pub fn declare_runner(&self, cmd: &str, gates: &[&str]) {
+        self.hook(gates);
+        git(&self.dir, &["config", "agent-verdict.runner", cmd]);
     }
 
     // Run until it stops complaining, which is the whole protocol: the last run has no gate left and commits.

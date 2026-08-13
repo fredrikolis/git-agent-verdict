@@ -1,7 +1,6 @@
 // Concern: one gate's decision about a commit message — what it demands, and what it refuses | Non-concern: running a review, or the wording of a rejection | IO: (message, index) -> pass or refusal
 
 use crate::cli::Invocation;
-use crate::declarations;
 use crate::git;
 use crate::report;
 use crate::state;
@@ -77,8 +76,8 @@ fn traced(gate: &str, verdicts: &[Verdict]) -> Result<bool, String> {
         if recorded.counts != verdict.counts {
             let detail = format!(
                 "the review reported {}, the trailer declares {}",
-                report::summarize(std::slice::from_ref(recorded)),
-                report::summarize(std::slice::from_ref(verdict))
+                recorded.counts.render(),
+                verdict.counts.render()
             );
             report::mismatch(gate, &detail);
             return Ok(false);
@@ -114,10 +113,6 @@ fn read_verdicts(inv: &Invocation) -> Result<Option<Vec<Verdict>>, String> {
 }
 
 pub fn check(inv: &Invocation) -> Result<bool, String> {
-    if declarations::listing_requested() {
-        declarations::emit_gate(inv);
-        return Ok(true);
-    }
     let rubrics = staged_rubrics(&inv.docs)?;
     if !rubrics.is_empty() {
         report::circular(&inv.gate, &rubrics);
@@ -145,14 +140,7 @@ pub fn check(inv: &Invocation) -> Result<bool, String> {
     }
     // A simple gate demands the review and records it; what the review found is the author's to act on, so no count of it is a blocker.
     if !inv.brief.simple && verdicts.iter().any(Verdict::blocks) {
-        let major = verdicts
-            .iter()
-            .map(|v| match v.counts {
-                trailer::Counts::Graded { major, .. } => major,
-                trailer::Counts::Advisory { .. } => 0,
-            })
-            .sum();
-        report::blocked(&inv.gate, major);
+        report::blocked(&inv.gate, trailer::total(&verdicts).major());
         return Ok(false);
     }
     report::attested(&inv.gate, verdicts.len(), &verdicts);

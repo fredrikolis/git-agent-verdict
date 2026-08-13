@@ -167,6 +167,74 @@ fn the_preflight_rejects_arguments_its_mode_cannot_use() {
     }
 }
 
+// Scanned across the whole line, an info flag exits 0 wherever it appears: a stray one in a gate's declaration passes the gate having checked nothing.
+#[test]
+fn an_info_flag_among_a_gates_arguments_does_not_pass_the_gate() {
+    let repo = Repo::new();
+    repo.stage(&["src.rs"]);
+    for stray in ["--version", "-V", "--help", "-h"] {
+        let (code, out) = repo.run(
+            DUMMY,
+            &["standards", "--doc", "rubric.md", "--path", ".", stray],
+        );
+        assert_eq!(code, 2, "{stray}: {out}");
+        assert!(out.contains("unknown flag"), "{stray}: {out}");
+    }
+}
+
+// git parses a trailer key as one word, so a gate named otherwise earns a trailer its own gate can never read back — and the remedy it prints is the line it just refused.
+#[test]
+fn a_gate_name_that_cannot_form_a_trailer_key_is_refused() {
+    let repo = Repo::new();
+    repo.stage(&["src.rs"]);
+    for name in ["my gate", "gate:two", ""] {
+        let (code, out) = repo.run(DUMMY, &[name, "--doc", "rubric.md", "--path", "."]);
+        assert_eq!(code, 2, "{name:?}: {out}");
+        assert!(out.contains("a gate name is letters"), "{name:?}: {out}");
+    }
+}
+
+// A declaration that no longer parses is the repo's wiring gone stale, and its maintainer is the reader: the whole guide fires, where a pointer to it would be read at some later commit or not at all.
+#[test]
+fn a_stale_declaration_prints_the_whole_setup_guide() {
+    let repo = Repo::new();
+    let (code, out) = repo.bare(&["MSG", "standards", "--doc", "rubric.md", "--nope"]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("usage:"), "{out}");
+    assert!(out.contains("core.hooksPath"), "{out}");
+    assert!(out.contains("agent-verdict.runner"), "{out}");
+}
+
+// attest is the dev agent's own interface: mistyping it says nothing about the repo's wiring, and a guide it cannot act on buries the one line that names the fault.
+#[test]
+fn a_mistyped_agent_verb_gets_the_usage_and_not_the_guide() {
+    let repo = Repo::new();
+    for args in [
+        vec!["attest", "--intent", "an aim", "--simple"],
+        vec!["attest"],
+        vec!["reset"],
+    ] {
+        let (code, out) = repo.bare(&args);
+        assert_eq!(code, 2, "{args:?}: {out}");
+        assert!(out.contains("usage:"), "{args:?}: {out}");
+        assert!(!out.contains("core.hooksPath"), "{args:?}: {out}");
+    }
+}
+
+#[test]
+fn the_setup_guide_answers_outside_a_repo() {
+    let out = std::process::Command::new(BIN)
+        .current_dir(std::env::temp_dir())
+        .arg("--repo-setup-guide")
+        .output()
+        .expect("binary runs");
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(0), "{text}");
+    assert!(text.contains("core.hooksPath .githooks"), "{text}");
+    assert!(text.contains("agent-verdict.runner"), "{text}");
+    assert!(text.contains("attest --intent"), "{text}");
+}
+
 #[test]
 fn an_auto_generated_subject_carries_no_review() {
     let repo = Repo::new();

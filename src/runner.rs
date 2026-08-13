@@ -31,7 +31,7 @@ fn required(fields: &str, name: &str) -> Result<String, String> {
 
 pub const MARKER: &str = "VERDICT:";
 
-// A refusal is not a count, so it is not a verdict shape: an advisory gate blocks on it exactly as a graded one does, which is what the old guard could not do.
+// A refusal is not a count, so it is not a verdict shape: an advisory gate blocks on it exactly as a graded one does.
 pub const REFUSED: &str = "refused";
 
 // Through a shell because the declaration is a command line a repo writes for itself, not an argv this tool composes.
@@ -44,16 +44,20 @@ pub fn invoke(runner: &Runner, brief: &str) -> Result<String, String> {
         .spawn()
         .map_err(|e| format!("cannot run the declared reviewer ({}): {e}", runner.cmd))?;
     let mut stdin = child.stdin.take().ok_or("the reviewer took no stdin")?;
-    // A reviewer that answers without reading closes the pipe first; that is its business, and the verdict it prints is still the verdict.
-    if let Err(e) = stdin.write_all(brief.as_bytes()) {
-        if e.kind() != std::io::ErrorKind::BrokenPipe {
-            return Err(format!("cannot brief the reviewer: {e}"));
-        }
-    }
-    drop(stdin);
+    // Written from its own thread, because both pipes are bounded: a reviewer that talks while the brief goes in fills stdout and waits for a read this side cannot reach until its own write finishes.
+    let text = brief.to_string();
+    let writer = std::thread::spawn(move || stdin.write_all(text.as_bytes()));
     let out = child
         .wait_with_output()
         .map_err(|e| format!("the reviewer did not finish: {e}"))?;
+    // A reviewer that answers without reading closes the pipe first; that is its business, and the verdict it prints is still the verdict.
+    match writer.join() {
+        Err(_) => return Err("the brief was never written to the reviewer".to_string()),
+        Ok(Err(e)) if e.kind() != std::io::ErrorKind::BrokenPipe => {
+            return Err(format!("cannot brief the reviewer: {e}"));
+        }
+        Ok(_) => {}
+    }
     if !out.status.success() {
         return Err(format!("the reviewer exited {}", out.status));
     }
@@ -73,7 +77,10 @@ fn counts_from(fields: &str, simple: bool) -> Result<Counts, String> {
             "findings" => 3,
             _ => continue,
         };
-        found[slot] = raw.parse().ok();
+        // Named but unreadable is not the same as absent: read as absent it would be reported as a missing field, sending the author after the wrong fault.
+        found[slot] = Some(raw.parse().map_err(|_| {
+            format!("the reviewer's {MARKER} line has {name}={raw}, which is not a number")
+        })?);
     }
     match (simple, found) {
         (true, [.., Some(findings)]) => Ok(Counts::Advisory { findings }),
@@ -122,6 +129,13 @@ pub fn verdicts(output: &str, simple: bool) -> Result<Vec<Verdict>, String> {
     if verdicts.is_empty() {
         return Err(format!(
             "the reviewer closed with no `{MARKER}` line, so it reported nothing this tool can record"
+        ));
+    }
+    // One review, one verdict: the rest is recorded under a single token and rendered as a trailer apiece, which the gate reads as trailers contradicting the review they name.
+    if verdicts.len() > 1 {
+        return Err(format!(
+            "the reviewer closed with {} `{MARKER}` lines; the brief asks for one, and which of them is the review is not this tool's to guess",
+            verdicts.len()
         ));
     }
     Ok(verdicts)

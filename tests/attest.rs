@@ -93,6 +93,104 @@ fn an_advisory_gate_counts_findings_and_never_grades() {
     assert!(!message.contains("major="), "{message}");
 }
 
+// A passing verdict closes its gate for this HEAD, so the edit satisfying a MODERATE is never recounted: a bound the reviewer enforces can break under the fix and land in a trailer claiming review.
+#[test]
+fn content_moving_after_its_verdict_is_named_before_the_commit() {
+    let repo = Repo::new();
+    repo.declare(CLEAN, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    repo.attest(AIM);
+    repo.write("src.rs", "code, and the line the fix added");
+    repo.stage(&["src.rs"]);
+    let run = repo.attest(AIM);
+    assert!(repo.committed(), "{}", run.err);
+    assert!(
+        run.err.contains("CONTENT MOVED SINCE ITS VERDICT"),
+        "{}",
+        run.err
+    );
+    assert!(run.err.contains("standards"), "{}", run.err);
+}
+
+#[test]
+fn content_left_alone_after_its_verdict_says_nothing() {
+    let repo = Repo::new();
+    repo.declare(CLEAN, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    let run = repo.attest_until(AIM, 3);
+    assert!(repo.committed(), "{}", run.err);
+    assert!(!run.err.contains("CONTENT MOVED"), "{}", run.err);
+}
+
+// A pathspec is written against the root because that is where git runs a hook, and one resolved from a subdirectory passes a gate on a fraction of the change without saying so.
+#[test]
+fn a_gate_reviews_the_same_files_from_any_directory() {
+    let repo = Repo::new();
+    std::fs::create_dir_all(repo.dir.join("sub")).expect("subdir");
+    repo.write("sub/deep.rs", "deep");
+    repo.declare(CLEAN, &[STANDARDS]);
+    repo.stage(&["src.rs", "sub/deep.rs"]);
+    let from_root = repo.capture(&["--reviewer-prompt", "standards"]);
+    let from_sub = repo.capture_in("sub", &["--reviewer-prompt", "standards"]);
+    assert_eq!(from_sub.code, 0, "{}", from_sub.err);
+    assert_eq!(from_root.out, from_sub.out, "{}", from_sub.out);
+    assert!(from_sub.out.contains("src.rs"), "{}", from_sub.out);
+}
+
+// Enumerating the hook must not fire its guards: under `set -e` the refusal kills the hook, and every gate below it leaves the listing — the guard reported as a hook that declares nothing.
+#[test]
+fn a_staged_rubric_still_lets_attest_read_the_hook() {
+    let repo = Repo::new();
+    let guard = r#"--rubric-guard --doc rubric.md"#;
+    repo.declare(CLEAN, &[guard, STANDARDS]);
+    repo.stage(&["src.rs", "rubric.md"]);
+    let run = repo.attest(AIM);
+    assert!(!run.err.contains("declared no gates"), "{}", run.err);
+    assert!(run.err.contains("RUBRIC IS STAGED"), "{}", run.err);
+    assert!(!repo.committed(), "a staged rubric committed anyway");
+}
+
+// stdout is the channel an agent parses, and git's own output is the only other thing on it: a landed commit it has to infer is one it may make twice.
+#[test]
+fn the_landed_commit_is_announced_on_stdout() {
+    let repo = Repo::new();
+    repo.declare(CLEAN, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    let run = repo.attest_until(AIM, 3);
+    assert!(repo.committed(), "{}", run.err);
+    assert!(run.out.contains("committed "), "{}", run.out);
+    assert!(run.out.contains("nothing left to run"), "{}", run.out);
+}
+
+// The diary is keyed on HEAD, which the commit moved, so a second run finds no step and nothing staged — which is not the hook failing to declare a gate.
+#[test]
+fn attest_after_the_commit_landed_names_the_empty_index() {
+    let repo = Repo::new();
+    repo.declare(CLEAN, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    repo.attest_until(AIM, 3);
+    assert!(repo.committed());
+    let run = repo.attest(AIM);
+    assert_eq!(run.code, 2, "{}", run.err);
+    assert!(run.err.contains("nothing staged"), "{}", run.err);
+}
+
+// The two shapes meet in one message, and the hook the commit fires reads both back: a graded trailer and an advisory one are the same commit's evidence.
+#[test]
+fn a_graded_and_an_advisory_gate_land_their_own_shapes_in_one_commit() {
+    let repo = Repo::new();
+    let per_gate = r#"case "$(cat)" in *"gate: prose"*) printf 'VERDICT: reviewer=fake session=s-1 findings=3\n';; *) printf 'VERDICT: reviewer=fake session=s-2 major=0 moderate=1 minor=2\n';; esac"#;
+    repo.declare_runner(per_gate, &[STANDARDS, PROSE]);
+    repo.stage(&["src.rs"]);
+    let message = repo.landed(AIM, 3);
+    let graded = "Reviewed-standards: reviewer=fake major=0 moderate=1 minor=2";
+    assert!(message.contains(graded), "{message}");
+    assert!(
+        message.contains("Reviewed-prose: reviewer=fake findings=3"),
+        "{message}"
+    );
+}
+
 // The brief is the one input the author still writes, so it may not drift between the gates of one commit.
 #[test]
 fn the_intent_cannot_change_between_gates() {
@@ -154,6 +252,19 @@ fn a_verdict_line_missing_a_required_field_is_refused() {
         assert_eq!(run.code, 2, "{missing}: {}", run.err);
         assert!(run.err.contains("carries no"), "{missing}: {}", run.err);
     }
+}
+
+// Recorded, the second line shares the first's token and lands as a trailer of its own, which the gate reads as contradicting the review it names: a commit the tool makes and its own hook refuses.
+#[test]
+fn a_reviewer_closing_with_two_verdict_lines_is_refused() {
+    let repo = Repo::new();
+    let doubled = "VERDICT: reviewer=a session=s-1 major=0 moderate=1 minor=0\\nVERDICT: reviewer=b session=s-2 major=0 moderate=2 minor=0";
+    repo.declare(doubled, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    let run = repo.attest(AIM);
+    assert_eq!(run.code, 2, "{}", run.err);
+    assert!(run.err.contains("asks for one"), "{}", run.err);
+    assert!(!repo.committed(), "a doubled verdict committed anyway");
 }
 
 // The counts say how much; only the report says what. An author told to address a finding it cannot read has been told nothing.

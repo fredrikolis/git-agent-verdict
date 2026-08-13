@@ -1,12 +1,14 @@
 // Concern: dispatching one invocation to the mode that answers it, and the version floor | Non-concern: the grammar of any mode, what it decides, or what it prints | IO: (argv) -> exit status
 
 mod attest;
+mod brief;
 mod cli;
 mod declarations;
 mod gate;
 mod git;
 mod report;
 mod runner;
+mod setup;
 mod state;
 mod trailer;
 
@@ -56,33 +58,55 @@ fn require_version(want: &str) -> Result<bool, String> {
     Ok(true)
 }
 
-// Kept for reading a gate's brief without provoking one: nothing in the workflow forwards this any more, because the tool runs the review itself.
+// Reads a gate's brief without provoking a review: the same text a reviewer would be given, for an author who wants to see what it is asked.
 fn reviewer_prompt(want: &str) -> Result<bool, String> {
     let hook = declarations::read()?;
     let declaration = declarations::find(&hook, want)?;
     // Read against the index, not an empty list: what is in scope is the same question here as it is when a review runs.
     let files = git::staged_existing(&declaration.paths)?;
-    println!("{}", report::prompt(declaration, None, &files)?);
+    println!("{}", brief::compose(declaration, None, &files)?);
     Ok(true)
+}
+
+// A hook declares its paths against the root, because that is where git runs it. An agent's attest stands anywhere, and `--path .` from a subdirectory reviews a fraction of the change in silence.
+fn at_repo_root() {
+    if let Ok(root) = git::toplevel() {
+        let _ = std::env::set_current_dir(root);
+    }
 }
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.iter().any(|a| a == "--version" || a == "-V") {
-        println!("git-agent-verdict {}", env!("CARGO_PKG_VERSION"));
-        return ExitCode::SUCCESS;
+    at_repo_root();
+    // The sole argument, never one of several: scanned across the whole line, a stray --version in a gate's declaration exits 0 and the gate passes having checked nothing.
+    if let [only] = args.as_slice() {
+        if only == "--version" || only == "-V" {
+            println!("git-agent-verdict {}", env!("CARGO_PKG_VERSION"));
+            return ExitCode::SUCCESS;
+        }
+        if only == "--help" || only == "-h" {
+            println!("{}", cli::USAGE);
+            return ExitCode::SUCCESS;
+        }
     }
-    if args.iter().any(|a| a == "--help" || a == "-h") {
-        println!("{}", cli::USAGE);
-        return ExitCode::SUCCESS;
-    }
-    let mode = match cli::parse(args.into_iter()) {
+    // A declaration that no longer parses is the repo's wiring gone stale, and the whole guide is the answer — not a pointer to it, read at the next commit by whoever is not fixing this one.
+    let mode = match cli::parse(args.clone().into_iter()) {
         Ok(mode) => mode,
         Err(detail) => {
             eprintln!("git-agent-verdict: {detail}\n{}", cli::USAGE);
+            if !cli::agent_verb(&args) {
+                eprintln!("\n{}", setup::guide());
+            }
             return ExitCode::from(2);
         }
     };
+    // Enumeration must not act: under `set -e` a mode that refuses here kills the hook, and every gate below it leaves the listing — a guard's refusal read back as a hook declaring nothing.
+    if declarations::listing_requested() {
+        if let Mode::Gate(inv) = &mode {
+            declarations::emit_gate(inv);
+        }
+        return ExitCode::SUCCESS;
+    }
     let (label, outcome) = match &mode {
         Mode::Gate(inv) => (inv.gate.as_str(), gate::check(inv)),
         Mode::Attest(intent) => ("attest", attest::run(intent)),
@@ -90,6 +114,10 @@ fn main() -> ExitCode {
         Mode::RubricGuard(docs) => (GUARD_LABEL, gate::rubric_guard(docs)),
         Mode::ReviewerPrompt(gate) => ("reviewer-prompt", reviewer_prompt(gate)),
         Mode::RequireVersion(want) => ("require-version", require_version(want)),
+        Mode::RepoSetupGuide => ("repo-setup-guide", {
+            println!("{}", setup::guide());
+            Ok(true)
+        }),
     };
     match outcome {
         Ok(true) => ExitCode::SUCCESS,

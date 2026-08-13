@@ -14,7 +14,6 @@ pub enum Counts {
 }
 
 // The session is evidence, not a claim: it names a transcript on one machine, so it is kept in the diary beside the counts and never published into a message.
-#[derive(Clone)]
 pub struct Verdict {
     pub reviewer: String,
     pub counts: Counts,
@@ -23,10 +22,74 @@ pub struct Verdict {
     pub session: String,
 }
 
+impl Counts {
+    pub fn major(self) -> u32 {
+        match self {
+            Counts::Graded { major, .. } => major,
+            Counts::Advisory { .. } => 0,
+        }
+    }
+
+    // Written the one way the grammar defines them, wherever they are read back: a trailer, a total, or a line an author is shown.
+    pub fn render(self) -> String {
+        match self {
+            Counts::Graded {
+                major,
+                moderate,
+                minor,
+            } => format!("major={major} moderate={moderate} minor={minor}"),
+            Counts::Advisory { findings } => format!("findings={findings}"),
+        }
+    }
+}
+
 impl Verdict {
     // major= alone. A MODERATE is fixed without a second look, so its count records what the reviewer found, not what is left outstanding — blocking on it would demand a re-review that no longer happens.
     pub fn blocks(&self) -> bool {
-        matches!(self.counts, Counts::Graded { major, .. } if major > 0)
+        self.counts.major() > 0
+    }
+}
+
+// A gate's verdicts all carry the shape its brief demanded, so their sum is one verdict's worth of counts in that same shape.
+pub fn total(verdicts: &[Verdict]) -> Counts {
+    verdicts
+        .iter()
+        .map(|v| v.counts)
+        .reduce(|a, b| match (a, b) {
+            (
+                Counts::Graded {
+                    major,
+                    moderate,
+                    minor,
+                },
+                Counts::Graded {
+                    major: m,
+                    moderate: d,
+                    minor: n,
+                },
+            ) => Counts::Graded {
+                major: major.saturating_add(m),
+                moderate: moderate.saturating_add(d),
+                minor: minor.saturating_add(n),
+            },
+            (Counts::Advisory { findings }, Counts::Advisory { findings: f }) => Counts::Advisory {
+                findings: findings.saturating_add(f),
+            },
+            (first, _) => first,
+        })
+        .unwrap_or(Counts::Graded {
+            major: 0,
+            moderate: 0,
+            minor: 0,
+        })
+}
+
+// The shape a brief demands back, and the shape a rejection shows the author: one gate, one set of field names.
+pub fn counts_shape(simple: bool) -> &'static str {
+    if simple {
+        "findings=<n>"
+    } else {
+        "major=<n> moderate=<n> minor=<n>"
     }
 }
 
@@ -76,9 +139,7 @@ fn read_field(f: &mut Fields, field: &str) -> Result<(), String> {
     let taken = match name {
         "reviewer" => f.reviewer.is_some(),
         "token" => f.token.is_some(),
-        other => slot_of(other)
-            .map(|s| f.numbers[s].is_some())
-            .unwrap_or(false),
+        other => slot_of(other).is_some_and(|s| f.numbers[s].is_some()),
     };
     // Last-wins would let `major=1 major=0` bury a declared blocker.
     if taken {
@@ -139,14 +200,7 @@ pub fn parse_for(gate: &str, block: &str) -> Result<Vec<Verdict>, String> {
 
 // The one place the grammar is written rather than read, so `attest` hands back a line this file will accept.
 pub fn render(gate: &str, verdict: &Verdict) -> String {
-    let counts = match verdict.counts {
-        Counts::Graded {
-            major,
-            moderate,
-            minor,
-        } => format!("major={major} moderate={moderate} minor={minor}"),
-        Counts::Advisory { findings } => format!("findings={findings}"),
-    };
+    let counts = verdict.counts.render();
     let resets = match verdict.resets {
         0 => String::new(),
         n => format!(" resets={n}"),

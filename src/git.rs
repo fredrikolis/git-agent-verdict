@@ -15,7 +15,7 @@ fn run(args: &[&str]) -> Result<Vec<u8>, String> {
     Ok(out.stdout)
 }
 
-fn nul_separated(bytes: Vec<u8>) -> Vec<String> {
+fn nul_separated(bytes: &[u8]) -> Vec<String> {
     bytes
         .split(|b| *b == 0)
         .filter(|s| !s.is_empty())
@@ -32,13 +32,19 @@ fn with_pathspec<'a>(base: &[&'a str], paths: &'a [String]) -> Vec<&'a str> {
 
 pub fn staged(paths: &[String]) -> Result<Vec<String>, String> {
     let args = with_pathspec(&["diff", "--cached", "--name-only", "-z"], paths);
-    Ok(nul_separated(run(&args)?))
+    Ok(nul_separated(&run(&args)?))
 }
 
 pub fn staged_existing(paths: &[String]) -> Result<Vec<String>, String> {
     let base = ["diff", "--cached", "--name-only", "-z", "--diff-filter=d"];
     let args = with_pathspec(&base, paths);
-    Ok(nul_separated(run(&args)?))
+    Ok(nul_separated(&run(&args)?))
+}
+
+// The staged change itself, not the names of what changed: a review is of content, and content is what can move under a verdict already given.
+pub fn staged_diff(paths: &[String]) -> Result<Vec<u8>, String> {
+    let args = with_pathspec(&["diff", "--cached"], paths);
+    run(&args)
 }
 
 // A literal pathspec matching nothing in the index is a typo; a glob is allowed to match nothing.
@@ -49,7 +55,7 @@ pub fn unmatched_literals(paths: &[String]) -> Result<Vec<String>, String> {
             continue;
         }
         let args = with_pathspec(&["ls-files", "-z"], std::slice::from_ref(spec));
-        if nul_separated(run(&args)?).is_empty() {
+        if nul_separated(&run(&args)?).is_empty() {
             bad.push(spec.clone());
         }
     }
@@ -63,8 +69,7 @@ pub fn toplevel() -> Result<String, String> {
 
 // Repo-relative form of a doc, or None when it lives outside the worktree and can never be staged.
 pub fn relative_to_root(doc: &str) -> Option<String> {
-    let root = run(&["rev-parse", "--show-toplevel"]).ok()?;
-    let root = std::path::Path::new(String::from_utf8_lossy(&root).trim())
+    let root = std::path::Path::new(&toplevel().ok()?)
         .canonicalize()
         .ok()?;
     let rest = std::path::Path::new(doc).strip_prefix(root).ok()?;

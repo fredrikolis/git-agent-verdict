@@ -20,6 +20,15 @@ additive.
 - `reset <reason>`: clears this commit's recorded reviews. The count and reasons reach the message.
 - `token=` on every trailer: the gate resolves it and rejects counts that contradict the review.
 - The reviewer's brief closes with a `VERDICT:` line, which is where the counts are read from.
+- `--repo-setup-guide`: the hook a repo declares its gates in, `core.hooksPath`, and the runner
+  config, pinned to the installed version. The one mode that answers outside a repo.
+- A CLI syntax error prints that guide in full. A declaration that no longer parses is the repo's
+  wiring gone stale, which its maintainer fixes — `attest` and `reset` are exempt, being what a dev
+  agent types, where the guide buries the line naming the fault.
+- `attest` names every gate whose content moved since its verdict, before it commits. Fixing what a
+  review found does not re-open its gate and nothing recounts, so a bound the reviewer enforces can
+  be broken by the fix and land unchecked. It is said rather than refused: re-reviewing every fix is
+  the loop this tool exists to avoid.
 - Everything else the reviewer said is written to `~/.agent-verdicts/<repo>/<head>-N-<gate>.log`
   and the path is printed. The counts say how much was found; only the report says what, and a
   full review is longer than the tail of a stream anyone reads. The log outlives the diary, which
@@ -48,6 +57,40 @@ additive.
   so an omission is a broken contract and exits 2 rather than being defaulted to a guess.
   `reviewer=` reaches the trailer; `session=` stays in the diary, because a transcript id is local
   evidence, not a public claim, and a pushed commit cannot be unpublished.
+
+- Every mode refuses a flag it does not take, `attest` and `reset` included, rather than acting on
+  half the invocation. A gate name is letters, digits, `-`, `_` or `.`: it becomes the trailer key
+  `Reviewed-<gate>`, and git parses a trailer key as one word.
+- Every message is dense and scannable — a labelled fact per line, remedies as bullets — for the
+  agent that reads them out of a hook's stderr. The reviewer's brief is unchanged.
+- `attest` says `committed <sha> — every gate attested, nothing left to run` on stdout. The landing
+  was announced on stderr alone, leaving the channel an agent parses to git's own output.
+- The guidance an author reads describes what `attest` does: it commits. Three messages still told
+  them to paste a trailer it returns.
+- A run with nothing staged says so, where it blamed the hook for declaring no gate this commit
+  reaches. It is what a run right after the commit landed finds.
+
+### Fixed
+- Every mode runs from the repo root. A hook declares its docs and pathspecs against the root,
+  because that is where git runs it, but `attest` runs wherever the agent stands — and `--path .`
+  resolved from a subdirectory reviewed a fraction of the change, passed, and said nothing.
+- `--version`, `-V`, `--help` and `-h` are answered only as the sole argument. Scanned across the
+  whole line, a stray one in a gate's declaration exited 0 and the gate passed having checked
+  nothing.
+- Enumerating a hook no longer fires its guards. `--rubric-guard` and `--require-version` acted
+  during the listing run, and under `set -e` the refusal killed the hook — every gate below it left
+  the listing, and a staged rubric was reported as a hook declaring no gates.
+- `attest` refuses a staged rubric before it pays for a review, not after. The hook's preflight
+  caught it only at commit time, by which point every gate had been reviewed and billed.
+- A reviewer closing with more than one `VERDICT:` line is refused. The extra lines were recorded
+  under one token and rendered as a trailer apiece, and the gate read them as contradicting the
+  review they named — the tool made a commit its own hook then refused.
+- A reviewer's `VERDICT:` count that is not a number is named as such, where it was read as an
+  absent field and reported as a missing one.
+- The brief is written to the reviewer from its own thread. Both pipes are bounded, so a reviewer
+  that talked while a long brief was still going in deadlocked against it.
+- A hook that declares no gates reports what it said while failing, instead of leaving the reader
+  with a hook they can see declaring gates and an error saying it declares none.
 
 ### Removed
 - `--per-file`, and `file=` from the trailer grammar. One verdict per gate. It demanded one trailer

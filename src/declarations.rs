@@ -82,7 +82,12 @@ pub fn read() -> Result<Hook, String> {
         }
     }
     if hook.gates.is_empty() {
-        return Err(format!("{} declared no gates", hook.path));
+        // What the hook said while failing is the whole diagnosis; without it the reader is told only that a hook they can see declares gates declares none.
+        let said = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        if said.is_empty() {
+            return Err(format!("{} declared no gates", hook.path));
+        }
+        return Err(format!("{} declared no gates; it said: {said}", hook.path));
     }
     Ok(hook)
 }

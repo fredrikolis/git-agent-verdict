@@ -22,6 +22,10 @@ Installs as `git agent-verdict`. `--help` is the flag reference; this file is no
 
 ## Wiring it into a repo
 
+`git agent-verdict --repo-setup-guide` prints this section from the binary, pinned to the installed
+version and answering outside a repo. A declaration that no longer parses prints it too: stale
+wiring is the maintainer's to fix, and the agent hitting it has no other way to reach this file.
+
 `.githooks/commit-msg`, enabled per clone with `git config core.hooksPath .githooks`:
 
 ```bash

@@ -121,10 +121,19 @@ fn deserialize(text: &str, token: &str) -> Option<Vec<Verdict>> {
     Some(verdicts)
 }
 
+// What a gate's staged content was when its reviewer saw it, so a later run can say whether that is still what will be committed.
+pub fn content_digest(paths: &[String]) -> Result<String, String> {
+    Ok(format!(
+        "{:016x}",
+        digest(&git::staged_diff(paths)?, 0xc0de)
+    ))
+}
+
 pub struct Step {
     pub gate: String,
     pub token: String,
     pub blocked: bool,
+    pub content: String,
 }
 
 pub fn progress() -> Result<Vec<Step>, String> {
@@ -144,12 +153,18 @@ pub fn progress() -> Result<Vec<Step>, String> {
             gate: gate.to_string(),
             token: token.to_string(),
             blocked: outcome == "major",
+            content: fields.next().unwrap_or_default().to_string(),
         });
     }
     Ok(steps)
 }
 
-pub fn record(gate: &str, verdicts: &[Verdict], blocked: bool) -> Result<String, String> {
+pub fn record(
+    gate: &str,
+    verdicts: &[Verdict],
+    blocked: bool,
+    content: &str,
+) -> Result<String, String> {
     let dir = here()?;
     let body = serialize(verdicts);
     let token = issue(gate, &body);
@@ -157,7 +172,7 @@ pub fn record(gate: &str, verdicts: &[Verdict], blocked: bool) -> Result<String,
     let stored = obfuscate(format!("{gate}\n{body}").as_bytes(), &token);
     std::fs::write(&entry, stored).map_err(|e| format!("cannot write {}: {e}", entry.display()))?;
     let outcome = if blocked { "major" } else { "pass" };
-    let line = format!("{gate}\t{token}\t{outcome}\n");
+    let line = format!("{gate}\t{token}\t{outcome}\t{content}\n");
     let progress = dir.join(PROGRESS);
     let mut text = std::fs::read_to_string(&progress).unwrap_or_default();
     text.push_str(&line);
@@ -210,12 +225,7 @@ pub fn log_reset(reason: &str) -> Result<u32, String> {
 }
 
 pub fn resets() -> Result<u32, String> {
-    let path = root()?.join(RESETS);
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Ok(0);
-    };
-    let head = git::head_sha();
-    Ok(text.lines().filter(|l| l.starts_with(&head)).count() as u32)
+    Ok(reasons()?.len() as u32)
 }
 
 pub fn reasons() -> Result<Vec<String>, String> {

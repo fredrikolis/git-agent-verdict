@@ -1,111 +1,40 @@
 // Concern: everything the tool prints — the skip line, each rejection, and what `attest` narrates as it runs | Non-concern: deciding whether a gate passed | IO: (gate, reason) -> stderr
 
 use crate::cli::Invocation;
-use crate::declarations::Declaration;
 use crate::git;
-use crate::runner::{MARKER, REFUSED};
 use crate::state;
-use crate::trailer::{key_for, Counts, Verdict};
-
-const TEMPLATE: &str = include_str!("prompt.md");
-const TEMPLATE_SIMPLE: &str = include_str!("prompt-simple.md");
-const PLACEHOLDER: &str = "<the aim of the change, stated flatly, as a spec would state it>";
+use crate::trailer::{self, counts_shape, key_for, Verdict};
 
 pub fn skipped(gate: &str, paths: &[String]) {
     eprintln!(
-        "git-agent-verdict: {gate}: skipped (no staged file matches {})",
+        "git-agent-verdict: {gate}: skipped — no staged file matches {}",
         paths.join(", ")
     );
 }
 
-// Only a built-in template carries an annotation line; an override is a repo's own file, and eating its first line would be a silent edit.
-fn built_in(text: &str) -> String {
-    text.lines().skip(1).collect::<Vec<_>>().join("\n")
-}
-
-fn shape_of(simple: bool) -> &'static str {
-    if simple {
-        "findings=<n>"
-    } else {
-        "major=<n> moderate=<n> minor=<n>"
-    }
-}
-
-// Every field the runner must report, in the line it must report them on: what is not stated here cannot be demanded of it.
-fn asked_of(simple: bool) -> String {
-    format!(
-        "reviewer=<who reviewed> session=<this review\'s id> {}",
-        shape_of(simple)
-    )
-}
-
-// The machine-read line is written here and nowhere else, so what the reviewer is asked for is the shape the runner parses.
-fn verdict_spec(declaration: &Declaration, files: &[String]) -> String {
-    let shape = asked_of(declaration.brief.simple);
-    let refusal = format!(
-        "\n\nIf you are refusing the brief, close with this instead, and review nothing:\n\n  {MARKER} {REFUSED}"
-    );
-    let listed = files
-        .iter()
-        .map(|f| format!("  {f}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!(
-        "The files under review, and no others:\n{listed}\n\nClose with exactly this line, and nothing after it:\n\n  {MARKER} {shape}{refusal}"
-    )
-}
-
-pub fn prompt(
-    declaration: &Declaration,
-    intent: Option<&str>,
-    files: &[String],
-) -> Result<String, String> {
-    let template = match &declaration.brief.prompt {
-        Some(path) => {
-            std::fs::read_to_string(path).map_err(|e| format!("--override-prompt {path}: {e}"))?
-        }
-        None if declaration.brief.simple => built_in(TEMPLATE_SIMPLE),
-        None => built_in(TEMPLATE),
-    };
-    let docs = declaration
-        .docs
-        .iter()
-        .map(|d| format!("  {d}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    Ok(template
-        .replace("{{gate}}", &declaration.gate)
-        .replace("{{docs}}", &docs)
-        .replace("{{intent}}", intent.unwrap_or(PLACEHOLDER))
-        .replace("{{verdict}}", &verdict_spec(declaration, files)))
-}
-
 fn shape(inv: &Invocation) -> String {
     let key = key_for(&inv.gate);
-    let counts = shape_of(inv.brief.simple);
-    format!("  {key}: reviewer=<id> {counts} token=<issued>")
+    let counts = counts_shape(inv.brief.simple);
+    format!("{key}: reviewer=<id> {counts} token=<issued>")
 }
 
-// The remedy is one command: the reviewer is never briefed by hand any more, so nothing here is forwarded anywhere.
+// The remedy is one command: the tool runs the review itself, so nothing here asks the author to brief anyone.
 pub fn missing(inv: &Invocation, detail: &str) {
     eprintln!("\ngit-agent-verdict: {}: REVIEW GATE FAILED\n", inv.gate);
-    eprintln!("MISSING — {detail}\n");
-    eprintln!("{}\n", shape(inv));
-    eprintln!("Earned by a review this tool runs for you:\n");
-    eprintln!(
-        "  git agent-verdict attest --intent \"<the aim of the change, in one flat line>\"\n"
-    );
-    eprintln!("It runs the next gate, records what the reviewer reported, and hands back the");
-    eprintln!("trailer to paste. Trailers must be the LAST paragraph of the message.");
+    eprintln!("  missing: {detail}");
+    eprintln!("  wanted:  {}\n", shape(inv));
+    eprintln!("  git agent-verdict attest --intent \"<the aim, one flat line>\"\n");
+    eprintln!("  - runs each gate in turn, records what the reviewer reported");
+    eprintln!("  - commits once every gate is attested");
+    eprintln!("  - composes the message from --intent; this message file is discarded");
 }
 
 fn refused(label: &str, judged_by: &str, rubrics: &[String]) {
     eprintln!("\ngit-agent-verdict: {label}: RUBRIC IS STAGED\n");
-    eprintln!("  {}", rubrics.join("\n  "));
-    eprintln!("\nThis commit changes a yardstick {judged_by} is judged against.");
-    eprintln!("Judging a change to the measure against that same measure is circular, so it");
-    eprintln!("lands on its own, unreviewed:\n\n  git commit --no-verify\n");
-    eprintln!("Keep it in a SEPARATE commit from any other change, which still needs its review.");
+    eprintln!("  {}\n", rubrics.join("\n  "));
+    eprintln!("  circular: {judged_by} judges against a measure this commit changes");
+    eprintln!("  - land it alone, unreviewed: git commit --no-verify");
+    eprintln!("  - every other change stays in its own commit, and still needs its review");
 }
 
 pub fn circular(gate: &str, rubrics: &[String]) {
@@ -117,26 +46,8 @@ pub fn preflight(rubrics: &[String]) {
     refused(crate::GUARD_LABEL, "a review in this hook", rubrics);
 }
 
-pub fn summarize(verdicts: &[Verdict]) -> String {
-    let (mut major, mut moderate, mut minor, mut findings) = (0, 0, 0, 0);
-    for verdict in verdicts {
-        match verdict.counts {
-            Counts::Graded {
-                major: a,
-                moderate: b,
-                minor: c,
-            } => {
-                major += a;
-                moderate += b;
-                minor += c;
-            }
-            Counts::Advisory { findings: n } => findings += n,
-        }
-    }
-    match verdicts.first().map(|v| v.counts) {
-        Some(Counts::Advisory { .. }) => format!("findings={findings}"),
-        _ => format!("major={major} moderate={moderate} minor={minor}"),
-    }
+fn summarize(verdicts: &[Verdict]) -> String {
+    trailer::total(verdicts).render()
 }
 
 pub fn attested(gate: &str, count: usize, verdicts: &[Verdict]) {
@@ -149,15 +60,16 @@ pub fn attested(gate: &str, count: usize, verdicts: &[Verdict]) {
 pub fn blocked(gate: &str, major: u32) {
     eprintln!("\ngit-agent-verdict: {gate}: DECLARED BLOCKER");
     eprintln!("  major={major} (must be 0)");
-    eprintln!("\nThe review named what is wrong. How it gets fixed is yours to decide; this gate");
-    eprintln!("reopens only when the same gate is attested again.");
+    eprintln!("  - fix what the review named; the remedy is yours");
+    eprintln!("  - the gate reopens only on a fresh attest of {gate}");
 }
 
 // A trailer whose token names no entry is the one thing a well-formed forgery looks like, so it says what it is rather than what is malformed.
 pub fn untraceable(gate: &str, token: &str) {
     eprintln!("\ngit-agent-verdict: {gate}: UNKNOWN TOKEN\n");
-    eprintln!("  token={token} matches no review recorded for this HEAD.");
-    eprintln!("\nRun `git agent-verdict attest --intent \"…\"` and paste the trailer it returns.");
+    eprintln!("  token={token} matches no review recorded for this HEAD");
+    eprintln!("  - run: git agent-verdict attest --intent \"…\"");
+    eprintln!("    it reviews what is left, then commits with trailers it can trace");
 }
 
 pub fn mismatch(gate: &str, detail: &str) {
@@ -187,8 +99,7 @@ fn log_path(gate: &str) -> Result<std::path::PathBuf, String> {
     let root = git::toplevel()?;
     let name = std::path::Path::new(&root)
         .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "repo".to_string());
+        .map_or_else(|| "repo".to_string(), |n| n.to_string_lossy().into_owned());
     let slug = format!("{name}-{}", &state::fingerprint(&root)[..8]);
     let home = std::env::var("HOME").map_err(|_| "no HOME to write the review log under")?;
     let dir = std::path::Path::new(&home)
@@ -230,29 +141,43 @@ pub fn reviewed(
     }
     eprintln!();
     if blocked {
-        eprintln!(
-            "MAJOR — this gate is not passed. Fix what the review named, then run attest again."
-        );
+        eprintln!("MAJOR — gate not passed. Fix what the review named, then attest again.");
         return;
     }
     match next {
-        Some(gate) => {
-            eprintln!("Address what it found, then run attest again for the {gate} gate.")
-        }
-        None => eprintln!("Address what it found, then run attest again for the trailers."),
+        Some(gate) => eprintln!("next: address the findings, then attest again for the {gate} gate"),
+        None => eprintln!(
+            "next: attest again, same intent — no gate left, so that run writes the trailers and commits"
+        ),
     }
 }
 
-// The counts reach the message from the diary rather than from whoever read the review, and nothing in between could have retyped them.
+// Said on stdout, beside the verdicts: an agent reading that channel would otherwise have to infer a landed commit from git's own output, and the run that follows a guess is a second commit.
 pub fn committed(trailers: &[String], out: &str) {
-    eprintln!("\ngit-agent-verdict: every gate attested — committed.\n");
+    println!(
+        "committed {} — every gate attested, nothing left to run",
+        git::head_sha()
+    );
+    print!("{out}");
+    // The counts reach the message from the diary rather than from whoever read the review, and nothing in between could have retyped them.
     for line in trailers {
         eprintln!("  {line}");
     }
-    print!("{out}");
+}
+
+// Named before the commit, not after: the trailer about to be written records what its reviewer saw, and this is every gate for which that is no longer what lands.
+pub fn moved(gates: &[String]) {
+    if gates.is_empty() {
+        return;
+    }
+    eprintln!("\ngit-agent-verdict: CONTENT MOVED SINCE ITS VERDICT\n");
+    eprintln!("  {}\n", gates.join("\n  "));
+    eprintln!("  - fixing what a review named does not re-open its gate, and nothing recounts");
+    eprintln!("  - a bound the reviewer enforces can be broken by the fix and land unchecked");
+    eprintln!("  - for a fresh review: git agent-verdict reset \"<why>\"");
 }
 
 pub fn reset_done(count: u32, reason: &str) {
     eprintln!("git-agent-verdict: review state cleared (reset {count} for this HEAD): {reason}");
-    eprintln!("The reason is recorded and travels into the commit message.");
+    eprintln!("  the reason is recorded and reaches the commit message");
 }
