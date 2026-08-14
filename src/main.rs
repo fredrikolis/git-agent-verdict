@@ -1,5 +1,6 @@
 // Concern: dispatching one invocation to the mode that answers it, and the version floor | Non-concern: the grammar of any mode, what it decides, or what it prints | IO: (argv) -> exit status
 
+mod agent;
 mod attest;
 mod brief;
 mod cli;
@@ -56,13 +57,16 @@ fn require_version(want: &str) -> Result<bool, String> {
     Ok(true)
 }
 
-// Reads a gate's brief without provoking a review: the same text a reviewer would be given, for an author who wants to see what it is asked.
+// Both halves as a reviewer gets them, without provoking a review: the standing instructions it is given once, and the line that opens a round.
 fn reviewer_prompt(want: &str) -> Result<bool, String> {
     let hook = declarations::read()?;
     let declaration = declarations::find(&hook, want)?;
-    // Read against the index, not an empty list: what is in scope is the same question here as it is when a review runs.
-    let files = git::staged_existing(&declaration.paths)?;
-    println!("{}", brief::compose(declaration, None, &files)?);
+    println!("{}", brief::system(declaration)?);
+    println!("──── and on stdin, opening a round ────\n");
+    println!(
+        "{}",
+        brief::opening("<the aim of the change, one flat line>")
+    );
     Ok(true)
 }
 
@@ -91,7 +95,7 @@ fn main() -> ExitCode {
     let mode = match cli::parse(args.clone().into_iter()) {
         Ok(mode) => mode,
         Err(detail) => {
-            eprintln!("git-agent-verdict: {detail}\n{}", cli::USAGE);
+            eprintln!("git-agent-verdict: error: {detail}\n{}", cli::USAGE);
             if !cli::agent_verb(&args) {
                 eprintln!("\n{}", setup::guide());
             }
@@ -100,14 +104,19 @@ fn main() -> ExitCode {
     };
     // Enumeration must not act: under `set -e` a mode that refuses here kills the hook, and every gate below it leaves the listing — a guard's refusal read back as a hook declaring nothing.
     if declarations::listing_requested() {
-        if let Mode::Gate(inv) = &mode {
-            declarations::emit_gate(inv);
+        match &mode {
+            Mode::Gate(inv) => {
+                declarations::emit_gate(inv);
+                return ExitCode::SUCCESS;
+            }
+            // The pin is the one thing enumeration must honour, and killing the listing is how it says so: a hook written against another line declares flags this binary may read differently, and reading them anyway buys a review against a declaration nobody has established this release can parse.
+            Mode::RequireVersion(_) => {}
+            _ => return ExitCode::SUCCESS,
         }
-        return ExitCode::SUCCESS;
     }
     let (label, outcome) = match &mode {
         Mode::Gate(inv) => (inv.gate.as_str(), gate::check(inv)),
-        Mode::Attest(intent) => ("attest", attest::run(intent)),
+        Mode::Attest(intent) => ("attest", attest::run(intent.as_deref())),
         Mode::Reset(reason) => ("reset", attest::reset(reason)),
         Mode::ReviewerPrompt(gate) => ("reviewer-prompt", reviewer_prompt(gate)),
         Mode::RequireVersion(want) => ("require-version", require_version(want)),
@@ -120,7 +129,7 @@ fn main() -> ExitCode {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::FAILURE,
         Err(detail) => {
-            eprintln!("git-agent-verdict: {label}: {detail}");
+            eprintln!("git-agent-verdict: error: {label}: {detail}");
             ExitCode::from(2)
         }
     }

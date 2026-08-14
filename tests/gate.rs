@@ -10,7 +10,10 @@ fn an_unattested_commit_fails_and_names_the_remedy() {
     repo.stage(&["src.rs"]);
     let (code, out) = repo.standards("subject\n\nbody\n");
     assert_eq!(code, 1, "{out}");
-    assert!(out.contains("REVIEW GATE FAILED"), "{out}");
+    assert!(
+        out.contains("error: standards: no reviewable trailer"),
+        "{out}"
+    );
     assert!(out.contains("attest --intent"), "{out}");
 }
 
@@ -21,7 +24,7 @@ fn a_trailer_whose_token_names_no_review_is_refused() {
     repo.stage(&["src.rs"]);
     let (code, out) = repo.standards(DUMMY);
     assert_eq!(code, 1, "{out}");
-    assert!(out.contains("UNKNOWN TOKEN"), "{out}");
+    assert!(out.contains("error: standards: unknown token"), "{out}");
 }
 
 #[test]
@@ -40,7 +43,7 @@ fn an_edited_count_is_caught_against_the_recorded_review() {
     );
     let (code, out) = repo.standards(&clean);
     assert_eq!(code, 1, "{out}");
-    assert!(out.contains("CONTRADICTS"), "{out}");
+    assert!(out.contains("contradicts the review"), "{out}");
     assert!(out.contains("major=1"), "{out}");
 }
 
@@ -60,7 +63,7 @@ fn a_declared_blocker_fails_even_when_it_is_traceable() {
     );
     let (code, out) = repo.standards(&honest);
     assert_eq!(code, 1, "{out}");
-    assert!(out.contains("DECLARED BLOCKER"), "{out}");
+    assert!(out.contains("error: standards: declared blocker"), "{out}");
 }
 
 #[test]
@@ -80,7 +83,7 @@ fn a_trailer_with_no_token_is_malformed() {
     let msg = "subject\n\nReviewed-standards: reviewer=opus major=0 moderate=0 minor=0\n";
     let (code, out) = repo.standards(msg);
     assert_eq!(code, 1, "{out}");
-    assert!(out.contains("MALFORMED"), "{out}");
+    assert!(out.contains("error: standards: malformed trailer"), "{out}");
 }
 
 #[test]
@@ -95,24 +98,63 @@ fn a_gate_with_no_matching_staged_file_is_skipped_and_says_so() {
     assert!(out.contains("skipped"), "{out}");
 }
 
+// A rubric is what the repo gates by, like the hook naming the gates: whoever changes one is the only one who could review the change, so it is maintenance and carries the friction of landing alone.
 #[test]
-fn staging_a_rubric_refuses_the_commit() {
+fn staging_a_rubric_is_refused_as_maintenance() {
     let repo = Repo::new();
+    repo.declare(DUMMY, &[STANDARDS]);
     repo.stage(&["src.rs", "rubric.md"]);
     let (code, out) = repo.standards(DUMMY);
     assert_eq!(code, 1, "{out}");
-    assert!(out.contains("RUBRIC IS STAGED"), "{out}");
+    assert!(out.contains("can never be attested"), "{out}");
+    assert!(out.contains("--no-verify"), "{out}");
 }
 
-// A gate stands aside when its own rubric is the whole of what is staged: there is no other change for it to judge, and nothing to keep the rubric separate from.
+// Alone or alongside work makes no difference: there is no arrangement of a rubric edit this tool can review.
 #[test]
-fn a_gate_whose_rubric_is_the_whole_commit_stands_aside() {
+fn a_rubric_alone_is_refused_too() {
     let repo = Repo::new();
+    repo.declare(DUMMY, &[STANDARDS]);
     repo.stage(&["rubric.md"]);
     let (code, out) = repo.standards(DUMMY);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("can never be attested"), "{out}");
+}
+
+// Another gate's measure is no more reviewable than its own: which gate owns it does not make it content.
+#[test]
+fn another_gates_rubric_is_refused_as_well() {
+    let repo = Repo::new();
+    repo.write("style.md", "the other measure");
+    let other = r#""$1" prose --simple --doc style.md --path "*.md""#;
+    repo.declare(DUMMY, &[STANDARDS, other]);
+    repo.stage(&["src.rs", "style.md"]);
+    let (code, out) = repo.standards(DUMMY);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("style.md"), "{out}");
+}
+
+// A gate built from nothing but its own rubric would meet a refusal at every commit it ever saw. Refused where the declaration is read: a gate that never judges is one the repo believes it has.
+#[test]
+fn a_gate_that_could_only_ever_meet_its_own_rubric_is_refused() {
+    let repo = Repo::new();
+    repo.stage(&["src.rs"]);
+    let (code, out) = repo.run(
+        DUMMY,
+        &["meta", "--doc", "rubric.md", "--path", "rubric.md"],
+    );
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("its own measure"), "{out}");
+    assert!(out.contains("Widen --path"), "{out}");
+}
+
+// A pathspec reaches what the repo gains later, so a gate covering its rubric among others is live and stands.
+#[test]
+fn a_gate_whose_pathspec_merely_includes_its_rubric_stands() {
+    let repo = Repo::new();
+    repo.stage(&["src.rs"]);
+    let (code, out) = repo.run(DUMMY, &["meta", "--doc", "rubric.md", "--path", "*.md"]);
     assert_eq!(code, 0, "{out}");
-    assert!(out.contains("stood aside"), "{out}");
-    assert!(!out.contains("RUBRIC IS STAGED"), "{out}");
 }
 
 // It took --doc and no --path, so it could not tell a commit that is only the measure from one burying work behind it, and refused the commit attest now composes.
@@ -170,7 +212,7 @@ fn a_mistyped_agent_verb_gets_the_usage_and_not_the_guide() {
     let repo = Repo::new();
     for args in [
         vec!["attest", "--intent", "an aim", "--simple"],
-        vec!["attest"],
+        vec!["attest", "--doc", "rubric.md"],
         vec!["reset"],
     ] {
         let (code, out) = repo.bare(&args);

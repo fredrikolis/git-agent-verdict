@@ -31,40 +31,40 @@ wiring is the maintainer's to fix, and the agent hitting it has no other way to 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
-git agent-verdict --require-version 1.3
+git agent-verdict --require-version 1.4
 git agent-verdict "$1" standards   --doc docs/repo-standards.md --path .
 git agent-verdict "$1" annotations --simple --doc docs/annotation-guide.md --path .
-git agent-verdict "$1" prose       --simple --doc docs/communication-style.md --path "*.md"
+git agent-verdict "$1" prose       --simple --doc docs/communication-style.md \
+                                   --rule "each entry is one half-sentence" --path "*.md"
 ```
 
 Gate names are repo-chosen labels, not keywords. Line order is review order, and `attest` takes them
 one at a time in that order: a later gate must never be judged against content an earlier one is
 still changing.
 
+`--rule` states a measure inline where a whole document would be more than the check is worth. A
+gate needs at least one `--doc` or `--rule`, and carries both where it wants both.
+
 Who reviews is **host** configuration, not the repo's — maintainers of one repo do not share a
 machine, a budget or a preferred agent:
 
 ```bash
-git config --global agent-verdict.runner "claude -p"     # every repo on this machine
-git config --local  agent-verdict.runner "…"             # this clone only
+git config --global agent-verdict.runner claude     # every repo on this machine
+git config --local  agent-verdict.runner claude     # this clone only
 ```
 
-There is no default: unset, `attest` refuses rather than spending on an agent nobody chose.
-`claude -p` is one runtime among many. The tool composes no argv of its own and acquires no model,
-key or SDK: it runs that command line with the brief on stdin and reads the verdict back. The
-command must report `reviewer=` and `session=` on the VERDICT line, and the brief says so — a
-wrapper piping through `jq` lifts both out of `--output-format json`. Rewrite the VERDICT line and pass the rest through —
-a wrapper that filters to the verdict alone throws away the only part that says what was wrong.
+There is no default: unset, `attest` refuses rather than spending on an agent nobody chose. The
+name is an agent this build knows how to drive, not a command line — resuming a session, carrying
+standing instructions and reading an answer back differ enough between agents that a repo cannot
+express them in one line of shell. `claude` is the one it knows.
 
-The verdict lands on stdout; the report is written to `~/.agent-verdicts/` and its path printed. Neither is defaulted: a
-runner that omits one has broken the contract the brief states, and a label invented here would put
-a guess on the record.
+The verdict lands on stdout; the report is written to `~/.agent-verdicts/` and its path printed.
 
 Each line is the whole declaration of its gate, which is what lets the tool brief a reviewer exactly
 as that gate will judge — it re-runs this hook to read the declarations rather than keeping a second
 copy in a config file.
 
-A pin, not a floor. `1.3` names a compatibility line: every additive `1.x` satisfies it, and `2.0.0`
+A pin, not a floor. `1.4` names a compatibility line: every additive `1.x` satisfies it, and `2.0.0`
 will not, because a major release may take a flag away or change what a trailer must carry. A hook
 written against the old grammar cannot tell on its own, and finds out when a commit dies on an
 unknown flag. Both directions are refused: too old cannot answer what the hook asks, and a later
@@ -96,11 +96,9 @@ git-agent-verdict: standards: REVIEW GATE FAILED
 `attest` reviews the next gate itself, records what the reviewer reported, and says what to fix. Run
 it until it stops complaining; the last run has no gate left and commits.
 
-Fixing what a review named moves the content its verdict describes, so that gate opens again and the
-next `attest` reviews it. That is the loop, and it ends when you stop editing: a trailer never
-attests text that is no longer there. `$AGENT_VERDICT_PRIOR_SESSION` carries the last reviewer's
-session to the next run, so a runner that can resume one reviews what changed rather than sampling
-the rubric afresh — which is what makes counts wander between rounds that fixed nothing.
+Fixing what a review named re-opens its gate, so the next `attest` reviews it again. The loop ends
+when the editing does, and a trailer never attests text that is no longer there. `--intent` is only
+needed on the first run of a commit; the aim is held, and may not change without a MAJOR.
 
 ```console
 $ git agent-verdict attest --intent "the commit-msg hook delegates verdict verification to a CLI"
@@ -137,9 +135,10 @@ Reviewed-annotations: reviewer=claude-opus-5 major=0 moderate=0 minor=1 token=9c
 One per gate. Named fields, so a field can be added without changing the arity. Trailers must be the
 message's last paragraph — that is what `git interpret-trailers --parse` reads.
 
-Scope is the gate's pathspec against the index, and the brief says so: it lists the staged files
-under review and states there are no others. `reviewer=` is what the runner reported; the session id
-that names its transcript stays in the diary, unpushed, because a commit cannot be unpublished.
+Scope is the gate's own pathspec, handed to the reviewer as the command that applies it, so an
+unscoped diff never reaches it. `reviewer=` is the model that answered and the session id naming its
+transcript are read from the agent, not asked of it: one it would guess at, the other it cannot
+know. The session stays in the diary, unpushed, because a commit cannot be unpublished.
 
 An advisory gate grades on the same ladder and has no MAJOR rung: it reports `major=0`, and nothing
 it finds blocks the commit. One count shape everywhere, and `major=` is the count that reaches zero.
@@ -203,12 +202,13 @@ tried before this one, both of which never settled:
 
 ## Two behaviours worth knowing
 
-**A gate stands aside from its own rubric.** Judging a change to the measure against that same
-measure is circular, so a gate whose `--doc` is the whole of what is staged does not review it —
-while any gate whose `--path` reaches that file still does, since another gate's measure is not
-moving. Staged alongside work, it is refused instead: stage the rubric alone and attest. `--path`
-is a git pathspec, so `*.md` matches at any depth and covers `docs/` too — `attest` names every
-staged path no gate read, and why.
+**A rubric is not reviewable here, and neither is the hook.** The hook names the gates and a
+`--doc` is what one judges against; a change to either is reviewed by the maintainer who made it,
+which is no review at all. Staging one is refused rather than reviewed, and it lands on its own
+with `git commit --no-verify` — then the work behind it comes in a commit of its own. The friction
+is the point: what a repo gates by should not move quietly alongside the code it gates. A rubric
+kept outside the repo, `$KB/standards.md` expanded by the hook's own shell, is never staged and
+never meets this at all.
 
 **It removes a `Co-authored-by:` trailer whose address is `@anthropic.com`.** Every commit in a repo
 gated this way is agent-written, so a fixed attribution line is constant and carries nothing, while

@@ -7,13 +7,9 @@ use crate::report;
 use crate::state;
 use crate::trailer::{self, Verdict};
 
-// A gate with nothing staged is not part of this commit, and neither is one whose own measure is the whole of what is staged — exactly as the gate itself decides when the hook runs.
+// A gate with nothing staged is not part of this commit — exactly as the gate itself decides when the hook runs.
 fn applies(declaration: &Declaration) -> Result<bool, String> {
-    if git::staged(&declaration.paths)?.is_empty() {
-        return Ok(false);
-    }
-    let state = gate::measure_state(&declaration.docs, &declaration.paths)?;
-    Ok(!matches!(state, gate::Measure::Alone(_)))
+    Ok(!git::staged(&declaration.paths)?.is_empty())
 }
 
 // The last word on a gate, which is the only one that counts: a re-review supersedes what it was asked to look at again.
@@ -21,21 +17,15 @@ fn latest<'a>(gate: &str, steps: &'a [state::Step]) -> Option<&'a state::Step> {
     steps.iter().rfind(|s| s.gate == gate)
 }
 
-// Content moves because the author is fixing what the review named — that is the work, not an anomaly. The gate stays open until a verdict describes what will be committed.
-fn settled(declaration: &Declaration, steps: &[state::Step]) -> Result<bool, String> {
-    let Some(step) = latest(&declaration.gate, steps) else {
-        return Ok(false);
-    };
-    if step.blocked {
-        return Ok(false);
-    }
-    Ok(state::content_digest(&declaration.paths)? == step.content)
+// MAJOR alone re-opens a gate. Acting on a MODERATE moves content too, and re-reviewing for that resamples advice the author already has — a loop keyed on content never ends.
+fn settled(declaration: &Declaration, steps: &[state::Step]) -> bool {
+    latest(&declaration.gate, steps).is_some_and(|step| !step.blocked)
 }
 
 // Line order is review order, and a later gate must never be judged against content an earlier one is still changing: the position is held here so nothing has to sequence it by hand.
 fn next<'a>(hook: &'a Hook, steps: &[state::Step]) -> Result<Option<&'a Declaration>, String> {
     for declaration in &hook.gates {
-        if !applies(declaration)? || settled(declaration, steps)? {
+        if !applies(declaration)? || settled(declaration, steps) {
             continue;
         }
         return Ok(Some(declaration));
@@ -43,46 +33,68 @@ fn next<'a>(hook: &'a Hook, steps: &[state::Step]) -> Result<Option<&'a Declarat
     Ok(None)
 }
 
+// Every gate this hook declares, and where each one stands: what is left is not a number, because a fix can bring a file into a pathspec that reached nothing before.
+fn survey(hook: &Hook, steps: &[state::Step]) -> Result<Vec<(String, report::Standing)>, String> {
+    let mut board = Vec::new();
+    for declaration in &hook.gates {
+        let gate = declaration.gate.clone();
+        let standing = if !applies(declaration)? {
+            report::Standing::Skipped(declaration.paths.join(", "))
+        } else if let Some(step) = latest(&gate, steps) {
+            let counts = state::lookup(&step.token)?
+                .map(|record| trailer::total(&record.verdicts).render())
+                .unwrap_or_default();
+            if step.blocked {
+                report::Standing::Blocked(counts)
+            } else {
+                report::Standing::Passed(counts)
+            }
+        } else {
+            report::Standing::Waiting
+        };
+        board.push((gate, standing));
+    }
+    Ok(board)
+}
+
+fn session_of(step: &state::Step) -> Option<String> {
+    let record = state::lookup(&step.token).ok()??;
+    Some(record.verdicts.first()?.session.clone()).filter(|s| !s.is_empty())
+}
+
 // The session the last reviewer reported. A runner that can resume one reads what changed, rather than sampling a rubric afresh every round.
 fn prior_session(declaration: &Declaration, steps: &[state::Step]) -> Option<String> {
-    let step = latest(&declaration.gate, steps)?;
-    let record = state::lookup(&step.token).ok()??;
-    let session = record.verdicts.first()?.session.clone();
-    Some(session).filter(|s| !s.is_empty())
+    session_of(latest(&declaration.gate, steps)?)
 }
 
-// An intent may only change once a MAJOR has sent the work back; anywhere else a changed brief is the review leaking into what the next reviewer is told.
-fn hold_intent(intent: &str, steps: &[state::Step]) -> Result<(), String> {
-    let sent_back = steps.last().is_some_and(|s| s.blocked);
-    if let Some(previous) = state::intent()? {
-        if previous != intent && !sent_back {
-            let detail = "the intent may only change after a MAJOR: state the same aim, or reset with a reason";
-            return Err(detail.to_string());
-        }
-    }
-    state::set_intent(intent)
-}
-
+// A resumed reviewer holds the aim, the criteria and the ladder; one starting fresh is told them again. The tool chose which, so there is nothing here to detect.
 fn review(
     declaration: &Declaration,
-    runner: &crate::runner::Runner,
+    agent: &crate::agent::Agent,
     intent: &str,
     prior: Option<String>,
 ) -> Result<(Vec<Verdict>, String), String> {
-    let files = git::staged_existing(&declaration.paths)?;
-    let brief = crate::brief::compose(declaration, Some(intent), &files)?;
-    report::reviewing(&declaration.gate, prior.is_some());
-    let output = crate::runner::invoke(runner, &brief, prior.as_deref())?;
-    let verdicts = crate::runner::verdicts(&output, declaration.brief.simple)?;
-    Ok((verdicts, crate::runner::findings(&output)))
+    let system = crate::brief::system(declaration)?;
+    let prompt = match prior {
+        Some(_) => crate::brief::continuing(),
+        None => crate::brief::opening(intent),
+    };
+    let answer = agent.run(
+        crate::agent::Role::Review,
+        &system,
+        &prompt,
+        prior.as_deref(),
+    )?;
+    let verdicts = crate::runner::verdicts(&answer, declaration.brief.simple)?;
+    Ok((verdicts, crate::runner::findings(&answer.text)))
 }
 
 fn trailers(hook: &Hook, steps: &[state::Step]) -> Result<Vec<String>, String> {
     let resets = state::resets()?;
     let mut lines = Vec::new();
-    // One line per gate, from its last verdict, and only where that verdict still describes what is staged: a superseded review and one whose files have left the commit both attest nothing about it.
+    // One line per gate, from its last verdict, and only while its files are still in the commit.
     for declaration in &hook.gates {
-        if !settled(declaration, steps)? {
+        if !settled(declaration, steps) || !applies(declaration)? {
             continue;
         }
         let Some(step) = latest(&declaration.gate, steps) else {
@@ -100,13 +112,6 @@ fn trailers(hook: &Hook, steps: &[state::Step]) -> Result<Vec<String>, String> {
         // The commit that just landed is the common way here: HEAD moved, the diary it was keyed on went with it, and there is nothing left to review.
         if git::staged(&[])?.is_empty() {
             return Err("nothing staged: nothing to review, nothing to commit".to_string());
-        }
-        // A commit that is only the measure carries no verdict: no gate can judge it without judging it by itself, and there is nothing else here to judge.
-        for declaration in &hook.gates {
-            let state = gate::measure_state(&declaration.docs, &declaration.paths)?;
-            if matches!(state, gate::Measure::Alone(_)) {
-                return Ok(lines);
-            }
         }
         return Err(format!(
             "{} declared no gate this commit reaches",
@@ -131,71 +136,69 @@ fn compose(intent: &str, trailers: &[String], resets: &[String]) -> String {
     message
 }
 
-// Every staged path no gate read, with the reason. The two are not the same news: a gate declining to judge its own measure is the design; a path no pathspec reaches is a hole in the wiring.
-fn unreviewed(hook: &Hook, steps: &[state::Step]) -> Result<Vec<report::Unread>, String> {
-    let mut unread = Vec::new();
-    for file in git::staged(&[])? {
-        let mut judged_by = None;
-        let mut reviewed = false;
-        for declaration in &hook.gates {
-            if !git::staged(&declaration.paths)?.contains(&file) {
-                continue;
-            }
-            if steps
-                .iter()
-                .any(|s| !s.blocked && s.gate == declaration.gate)
-            {
-                reviewed = true;
-                break;
-            }
-            judged_by = Some(declaration.gate.clone());
-        }
-        if !reviewed {
-            unread.push(report::Unread { file, judged_by });
-        }
-    }
-    Ok(unread)
-}
-
 // Nothing hands a token to anyone: the last run writes the trailers itself, and the hook it triggers verifies them exactly as it would verify a commit made by hand.
 fn land(hook: &Hook, steps: &[state::Step], intent: &str) -> Result<bool, String> {
     let trailers = trailers(hook, steps)?;
-    report::unreviewed(&unreviewed(hook, steps)?);
+    report::gates(&survey(hook, steps)?);
     let message = compose(intent, &trailers, &state::reasons()?);
     let out = git::commit(&message)?;
     report::committed(&trailers, &out);
     Ok(true)
 }
 
-pub fn run(intent: &str) -> Result<bool, String> {
+pub fn run(asked: Option<&str>) -> Result<bool, String> {
     let hook = declarations::read()?;
-    // The gate refuses a mixed commit at commit time regardless, and attest pays for the reviews in between — so it asks first, per gate, since only the gate whose measure is moving cannot judge.
-    for declaration in &hook.gates {
-        if let gate::Measure::Mixed(rubrics) =
-            gate::measure_state(&declaration.docs, &declaration.paths)?
-        {
-            report::circular(&declaration.gate, &rubrics);
-            return Ok(false);
-        }
+    // Asked before a review is paid for, and refused for the same reason the gate refuses it at commit time.
+    let staged_machinery = gate::machinery_staged()?;
+    if !staged_machinery.is_empty() {
+        report::maintenance(&staged_machinery);
+        return Ok(false);
     }
     let steps = state::progress()?;
-    hold_intent(intent, &steps)?;
+    let recorded = state::intent()?;
+    // Stated once, and it does not move: an aim restated is an aim that can drift, and what the first reviewer was briefed against is what the rest are judged by.
+    let intent = match (asked, recorded.as_deref()) {
+        (None, Some(held)) => held.to_string(),
+        (Some(asked), None) => {
+            let judge = crate::runner::configured()?;
+            report::judging();
+            let answer = judge.run(
+                crate::agent::Role::JudgeIntent,
+                &crate::brief::judge_system(),
+                &crate::brief::judge_prompt(asked),
+                None,
+            )?;
+            crate::runner::judge(&answer, asked)?;
+            state::set_intent(asked)?;
+            asked.to_string()
+        }
+        (Some(_), Some(held)) => {
+            return Err(format!(
+                "this commit already states its aim, and it does not move:\n  {held}\nattest takes no --intent after the first run."
+            ))
+        }
+        (None, None) => {
+            return Err("attest needs --intent: no aim is recorded for this commit yet".to_string())
+        }
+    };
+    let intent = intent.as_str();
     let Some(declaration) = next(&hook, &steps)? else {
         return land(&hook, &steps, intent);
     };
-    let runner = crate::runner::configured()?;
+    let agent = crate::runner::configured()?;
     let prior = prior_session(declaration, &steps);
-    let (verdicts, findings) = review(declaration, &runner, intent, prior)?;
+    let (verdicts, findings) = review(declaration, &agent, intent, prior)?;
     let blocked = verdicts.iter().any(Verdict::blocks);
-    let content = state::content_digest(&declaration.paths)?;
-    state::record(&declaration.gate, &verdicts, blocked, &content)?;
-    let remaining = next(&hook, &state::progress()?)?.map(|d| d.gate.clone());
+    state::record(&declaration.gate, &verdicts, blocked)?;
+    let after = state::progress()?;
+    let remaining = next(&hook, &after)?.map(|d| d.gate.clone());
     report::reviewed(
         &declaration.gate,
         &verdicts,
         blocked,
         remaining.as_deref(),
         &findings,
+        &survey(&hook, &after)?,
     );
     Ok(!blocked)
 }

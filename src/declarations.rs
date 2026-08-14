@@ -9,6 +9,7 @@ const LIST_ENV: &str = "GIT_AGENT_VERDICT_LIST";
 pub struct Declaration {
     pub gate: String,
     pub docs: Vec<String>,
+    pub rules: Vec<String>,
     pub paths: Vec<String>,
     pub brief: Brief,
 }
@@ -27,6 +28,7 @@ pub fn emit_gate(inv: &Invocation) {
         fields.push(format!("prompt={path}"));
     }
     fields.extend(inv.docs.iter().map(|d| format!("doc={d}")));
+    fields.extend(inv.rules.iter().map(|r| format!("rule={r}")));
     fields.extend(inv.paths.iter().map(|p| format!("path={p}")));
     println!("{}", fields.join("\t"));
 }
@@ -35,12 +37,15 @@ fn read_gate(gate: &str, fields: std::str::Split<'_, char>) -> Option<Declaratio
     let mut declaration = Declaration {
         gate: gate.to_string(),
         docs: Vec::new(),
+        rules: Vec::new(),
         paths: Vec::new(),
         brief: Brief::default(),
     };
     for field in fields {
         if let Some(doc) = field.strip_prefix("doc=") {
             declaration.docs.push(doc.to_string());
+        } else if let Some(text) = field.strip_prefix("rule=") {
+            declaration.rules.push(text.to_string());
         } else if let Some(path) = field.strip_prefix("path=") {
             declaration.paths.push(path.to_string());
         } else if let Some(path) = field.strip_prefix("prompt=") {
@@ -49,8 +54,8 @@ fn read_gate(gate: &str, fields: std::str::Split<'_, char>) -> Option<Declaratio
             declaration.brief.simple = true;
         }
     }
-    // A line with no doc is not a gate: the hook's own version check and any command it runs beside them print nothing here.
-    if declaration.docs.is_empty() {
+    // A line with no measure is not a gate: the hook's own version check and any command it runs beside them print nothing here.
+    if declaration.docs.is_empty() && declaration.rules.is_empty() {
         return None;
     }
     Some(declaration)
@@ -81,13 +86,20 @@ pub fn read() -> Result<Hook, String> {
             hook.gates.push(gate);
         }
     }
+    // What the hook said while failing is the whole diagnosis; without it the reader is told only that a hook they can see declares gates declares none.
+    let said = String::from_utf8_lossy(&out.stderr).trim().to_string();
     if hook.gates.is_empty() {
-        // What the hook said while failing is the whole diagnosis; without it the reader is told only that a hook they can see declares gates declares none.
-        let said = String::from_utf8_lossy(&out.stderr).trim().to_string();
         if said.is_empty() {
             return Err(format!("{} declared no gates", hook.path));
         }
         return Err(format!("{} declared no gates; it said: {said}", hook.path));
+    }
+    // Every declaration prints its line and exits 0 while enumerating, so anything on stderr is one that refused. Read past it and the gate it refused for is simply absent from the listing — a repo one gate lighter than the hook says, and nothing saying so.
+    if !said.is_empty() {
+        return Err(format!(
+            "{}: a declaration in it was refused, so what it gates by cannot be read:\n{said}",
+            hook.path
+        ));
     }
     Ok(hook)
 }

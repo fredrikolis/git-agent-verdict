@@ -21,21 +21,23 @@ const GUIDE: &str = r#"WIRING A REPO — git-agent-verdict
      # The compatibility line these flags are written against.
      git agent-verdict --require-version {{line}}
 
-     # Graded, and blocks on major=. One gate may be judged against several rubrics.
+     # Graded, and blocks on major=. A gate may be judged against several rubrics, and --rule
+     # states one inline where a whole document would be more than the check is worth.
      git agent-verdict "$1" my-standards-gate \
-       --doc docs/standards.md --doc docs/annotations.md --path .
+       --doc docs/standards.md --doc docs/annotations.md \
+       --rule "every public item carries a one-line comment" \
+       --path .
 
      # Advisory: same ladder, no MAJOR rung, never blocks. The shell expands $KB, so a rubric may live
-     # outside the repo, where nothing can stage it.
-     # `*.md` is a git pathspec, so it matches at any depth: this gate reads docs/standards.md
-     # too, which is what leaves the standards rubric reviewed by someone when it changes alone.
+     # outside the repo, where nothing can stage it. A gate needs at least one --doc or --rule.
+     # `*.md` is a git pathspec, so it matches at any depth: this gate reads docs/ too.
      git agent-verdict "$1" prose-gate --simple \
        --doc "$KB/writing-style.md" --path "*.md"
 
      # Line order is review order: a later gate is never judged against what an earlier one is
      # still changing. Gate names are repo-chosen labels, and reach the trailer as Reviewed-<name>.
-     # A gate stands aside when its own rubric is the whole of what is staged, so let some other
-     # gate's --path cover your rubrics — attest names every staged file no gate read.
+     # Staging a rubric is refused, whichever gate declares it: what the repo gates by is
+     # maintenance, and lands on its own with --no-verify.
 
    chmod +x .githooks/commit-msg
 
@@ -50,26 +52,17 @@ const GUIDE: &str = r#"WIRING A REPO — git-agent-verdict
    budget or a preferred agent. There is no default — unset, attest refuses rather than spending
    on an agent nobody chose.
 
-     git config --global agent-verdict.runner "claude -p"
-
-   Any command that reads a brief on stdin and closes with one VERDICT: line will do; that one is
-   an example, not a dependency. It must report reviewer= and session= on the line, as the brief
-   asks. Wrapping it, pass the reviewer's own output through: the counts say how much was found,
-   and only that output says what.
-
-   Fixing what a review names re-opens its gate, so the next attest reviews the same gate again.
-   $AGENT_VERDICT_PRIOR_SESSION holds the session the last reviewer reported. A runner that can
-   resume it reads what changed instead of sampling the whole rubric afresh:
-
-     git config --global agent-verdict.runner \
-       'if [ -n "$AGENT_VERDICT_PRIOR_SESSION" ]; then claude -p --resume "$AGENT_VERDICT_PRIOR_SESSION"; else claude -p; fi'
+     git config --global agent-verdict.runner claude
 
 4. Commit through the tool, not through git:
 
      git agent-verdict attest --intent "<the aim, one flat line>"
 
    One gate per run, in declaration order. It records what the reviewer reported and commits once
-   every gate is attested. The message is composed from --intent; nothing is handed back to paste."#;
+   every gate is attested. The message is composed from --intent; nothing is handed back to paste.
+
+   Fixing what a review named re-opens its gate, so run attest again after each fix. --intent is
+   only needed on the first run."#;
 
 pub fn guide() -> String {
     GUIDE.replace("{{line}}", &line())

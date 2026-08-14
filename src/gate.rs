@@ -1,6 +1,7 @@
 // Concern: one gate's decision about a commit message — what it demands, and what it refuses | Non-concern: running a review, or the wording of a rejection | IO: (message, index) -> pass or refusal
 
 use crate::cli::Invocation;
+use crate::declarations;
 use crate::git;
 use crate::report;
 use crate::state;
@@ -19,38 +20,36 @@ fn auto_generated(raw: &str) -> bool {
     }
 }
 
-// Circularity is per gate: a gate cannot judge a change to its own measure, and a gate whose measure is untouched judges that change like any other.
-pub enum Measure {
-    Untouched,
-    // Its own rubric and nothing else in scope: there is no other change for this gate to judge, so it stands aside rather than refusing a commit that is only the measure.
-    Alone(Vec<String>),
-    // Its rubric alongside work it would have to judge against a measure that is moving.
-    Mixed(Vec<String>),
+// Repo-relative, as git matches it: the hook path arrives relative to the root already, and only a --doc is absolute.
+fn in_repo(path: &str) -> String {
+    if std::path::Path::new(path).is_absolute() {
+        git::relative_to_root(path).unwrap_or_else(|| path.to_string())
+    } else {
+        path.to_string()
+    }
 }
 
-pub fn measure_state(docs: &[String], paths: &[String]) -> Result<Measure, String> {
-    let rubrics = staged_rubrics(docs)?;
-    if rubrics.is_empty() {
-        return Ok(Measure::Untouched);
+// What the repo gates by: the hook naming the gates, and every measure they judge against. A change to either is reviewed by the maintainer who made it, which is no review at all — so it is maintenance, out of scope here, and lands on its own.
+pub fn machinery_staged() -> Result<Vec<String>, String> {
+    let mut watched: Vec<String> = Vec::new();
+    if let Ok(hook) = git::hook_path() {
+        watched.push(in_repo(&hook));
     }
-    let in_scope = git::staged(paths)?;
-    if in_scope.iter().all(|f| rubrics.contains(f)) {
-        return Ok(Measure::Alone(rubrics));
+    if let Ok(hook) = declarations::read() {
+        for gate in &hook.gates {
+            for doc in &gate.docs {
+                let doc = in_repo(doc);
+                if !watched.contains(&doc) {
+                    watched.push(doc);
+                }
+            }
+        }
     }
-    Ok(Measure::Mixed(rubrics))
-}
-
-// The inverse verb: fire BECAUSE a yardstick is staged.
-pub fn staged_rubrics(docs: &[String]) -> Result<Vec<String>, String> {
-    let in_repo: Vec<String> = docs
-        .iter()
-        .filter_map(|d| git::relative_to_root(d))
-        .collect();
-    if in_repo.is_empty() {
+    if watched.is_empty() {
         return Ok(Vec::new());
     }
-    let staged = git::staged(&in_repo)?;
-    Ok(in_repo.into_iter().filter(|d| staged.contains(d)).collect())
+    let staged = git::staged(&watched)?;
+    Ok(watched.into_iter().filter(|w| staged.contains(w)).collect())
 }
 
 // The one edit this tool makes to a message: every commit in a repo gated this way is agent-written, so a fixed attribution line is constant and carries nothing.
@@ -124,16 +123,10 @@ fn read_verdicts(inv: &Invocation) -> Result<Option<Vec<Verdict>>, String> {
 }
 
 pub fn check(inv: &Invocation) -> Result<bool, String> {
-    match measure_state(&inv.docs, &inv.paths)? {
-        Measure::Alone(rubrics) => {
-            report::abstained(&inv.gate, &rubrics);
-            return Ok(true);
-        }
-        Measure::Mixed(rubrics) => {
-            report::circular(&inv.gate, &rubrics);
-            return Ok(false);
-        }
-        Measure::Untouched => {}
+    let staged_machinery = machinery_staged()?;
+    if !staged_machinery.is_empty() {
+        report::maintenance(&staged_machinery);
+        return Ok(false);
     }
     let unmatched = git::unmatched_literals(&inv.paths)?;
     if !unmatched.is_empty() {

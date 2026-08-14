@@ -72,6 +72,15 @@ impl Repo {
             .current_dir(self.dir.join(subdir))
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            // The stub agent goes first: the tool runs `claude` by name, so this is where a test's reviewer is substituted.
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    self.dir.join("bin").display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            )
             .args(args)
             .output()
             .expect("binary runs");
@@ -100,8 +109,16 @@ impl Repo {
         (run.code, run.err)
     }
 
+    // Every run carries the flag a fresh agent is refused for forgetting: the harness is not the reader that nudge is for.
+    const BACKGROUND: &str = "--confirm-running-in-background-shell-with-long-timeout";
+
+    // The aim is stated on the first run of a commit and held; every later run simply asks again.
     pub fn attest(&self, intent: &str) -> Run {
-        self.capture(&["attest", "--intent", intent])
+        self.capture(&["attest", "--intent", intent, Self::BACKGROUND])
+    }
+
+    pub fn again(&self) -> Run {
+        self.capture(&["attest", Self::BACKGROUND])
     }
 
     // One declaration per line, run through the binary by absolute path: a name resolves from PATH, which passes on a box with the tool installed and fails in CI.
@@ -128,10 +145,42 @@ impl Repo {
         self.declare_runner(&format!("printf '{verdict}\\n'"), gates);
     }
 
-    // A runner that answers differently per round, or records what it was handed.
-    pub fn declare_runner(&self, cmd: &str, gates: &[&str]) {
+    // A stub `claude` on PATH, so the tool's own argv and its reading of the answer are what a test exercises. The body prints the reviewer's text; the stub wraps it as the JSON the real one returns.
+    pub fn declare_runner(&self, body: &str, gates: &[&str]) {
         self.hook(gates);
-        git(&self.dir, &["config", "agent-verdict.runner", cmd]);
+        let bin = self.dir.join("bin");
+        std::fs::create_dir_all(&bin).expect("bin dir");
+        let stub = format!(
+            r#"#!/bin/sh
+system=""; resume=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --append-system-prompt-file) system="$2"; shift 2 ;;
+    --resume) resume="$2"; shift 2 ;;
+    --model) model="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+export AGENT_VERDICT_SYSTEM="$system" AGENT_VERDICT_PRIOR_SESSION="$resume"
+if grep -q "You judge one line of text" "$system" 2>/dev/null; then
+  text=$(cat judge-answer 2>/dev/null || echo "VERDICT: accepted")
+else
+  text=$({body})
+fi
+export SID=$(cat session 2>/dev/null || echo s-1) TEXT="$text"
+python3 -c 'import json, os; print(json.dumps({{"is_error": False, "result": os.environ["TEXT"], "session_id": os.environ["SID"], "modelUsage": {{"fake-model": {{}}}}}}))'
+"#
+        );
+        let path = bin.join("claude");
+        std::fs::write(&path, stub).expect("write stub");
+        let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
+        std::fs::set_permissions(&path, mode).expect("chmod");
+        git(&self.dir, &["config", "agent-verdict.runner", "claude"]);
+    }
+
+    // What the stub answers when it is handed the judge's instructions rather than a review's.
+    pub fn judge(&self, answer: &str) {
+        self.write("judge-answer", answer);
     }
 
     pub fn read(&self, name: &str) -> String {
@@ -145,7 +194,7 @@ impl Repo {
             if self.committed() {
                 break;
             }
-            last = self.attest(intent);
+            last = self.again();
         }
         last
     }
@@ -167,6 +216,19 @@ impl Repo {
             .output()
             .expect("git runs");
         String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    // Continuing a commit whose aim is already recorded.
+    pub fn landed_again(&self, rounds: usize) -> String {
+        let mut last = self.again();
+        for _ in 1..rounds {
+            if self.committed() {
+                break;
+            }
+            last = self.again();
+        }
+        assert!(self.committed(), "no commit landed: {}", last.err);
+        self.head_message()
     }
 
     // The whole protocol in one call: review every gate, then commit, and answer with the message that landed.

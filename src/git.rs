@@ -35,18 +35,6 @@ pub fn staged(paths: &[String]) -> Result<Vec<String>, String> {
     Ok(nul_separated(&run(&args)?))
 }
 
-pub fn staged_existing(paths: &[String]) -> Result<Vec<String>, String> {
-    let base = ["diff", "--cached", "--name-only", "-z", "--diff-filter=d"];
-    let args = with_pathspec(&base, paths);
-    Ok(nul_separated(&run(&args)?))
-}
-
-// The staged change itself, not the names of what changed: a review is of content, and content is what can move under a verdict already given.
-pub fn staged_diff(paths: &[String]) -> Result<Vec<u8>, String> {
-    let args = with_pathspec(&["diff", "--cached"], paths);
-    run(&args)
-}
-
 // A literal pathspec matching nothing in the index is a typo; a glob is allowed to match nothing.
 pub fn unmatched_literals(paths: &[String]) -> Result<Vec<String>, String> {
     let mut bad = Vec::new();

@@ -1,78 +1,52 @@
-// Concern: running the declared reviewer over a brief, and reading the verdict lines it closes with | Non-concern: what the reviewer is asked, or what its numbers mean | IO: (command, brief) -> verdicts
+// Concern: which agent reviews, and what the tool reads back out of its answer | Non-concern: how that agent is invoked, or what it was asked | IO: (answer) -> verdicts
 
+use crate::agent::{Agent, Answer};
 use crate::git;
 use crate::trailer::{Counts, Verdict};
-use std::io::Write;
-use std::process::{Command, Stdio};
 
 const RUNNER_KEY: &str = "agent-verdict.runner";
 
-pub struct Runner {
-    pub cmd: String,
-}
-
-// Host configuration, not a repo's: a repo that declared its reviewer would pick one for every maintainer, and they do not share a machine, a budget or a preferred agent.
-pub fn configured() -> Result<Runner, String> {
-    let cmd = git::config(RUNNER_KEY).ok_or_else(|| {
-        format!(
-            "no reviewer configured, and there is no default — unset, this refuses rather than spending on an agent nobody chose:\n  \
-             git config --global {RUNNER_KEY} \"claude -p\"\n\
-             Any command that reads a brief on stdin and closes with a {MARKER} line will do."
-        )
-    })?;
-    Ok(Runner { cmd })
-}
-
-// Demanded, not defaulted: the brief states the line this tool will read, so a runner that omits a field has broken a contract, and a label invented here would put a guess on the record instead of saying so.
-fn required(fields: &str, name: &str) -> Result<String, String> {
-    fields
-        .split_whitespace()
-        .find_map(|f| f.strip_prefix(&format!("{name}=")))
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .ok_or_else(|| format!("the reviewer's {MARKER} line carries no {name}=, which the brief asks it to report"))
-}
-
 pub const MARKER: &str = "VERDICT:";
-
-// A refusal is not a count, so it is not a verdict shape: an advisory gate blocks on it exactly as a graded one does.
 pub const REFUSED: &str = "refused";
 
-// Handed to the next run through the environment, never as an argv: composing a resume flag here would pick one vendor's CLI for every repo.
-pub const PRIOR_SESSION: &str = "AGENT_VERDICT_PRIOR_SESSION";
+// Host configuration, not a repo's: a repo that declared its reviewer would pick one for every maintainer, and they do not share a machine, a budget or a preferred agent.
+pub fn configured() -> Result<Agent, String> {
+    let named = git::config(RUNNER_KEY).ok_or_else(|| {
+        format!(
+            "no reviewer configured, and there is no default — unset, this refuses rather than spending on an agent nobody chose:\n  \
+             git config --global {RUNNER_KEY} claude"
+        )
+    })?;
+    Agent::named(&named)
+}
 
-// Through a shell because the declaration is a command line a repo writes for itself, not an argv this tool composes.
-pub fn invoke(runner: &Runner, brief: &str, prior: Option<&str>) -> Result<String, String> {
-    let mut command = Command::new("sh");
-    command.arg("-c").arg(&runner.cmd);
-    match prior {
-        Some(session) => command.env(PRIOR_SESSION, session),
-        None => command.env_remove(PRIOR_SESSION),
-    };
-    let mut child = command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("cannot run the declared reviewer ({}): {e}", runner.cmd))?;
-    let mut stdin = child.stdin.take().ok_or("the reviewer took no stdin")?;
-    // Written from its own thread, because both pipes are bounded: a reviewer that talks while the brief goes in fills stdout and waits for a read this side cannot reach until its own write finishes.
-    let text = brief.to_string();
-    let writer = std::thread::spawn(move || stdin.write_all(text.as_bytes()));
-    let out = child
-        .wait_with_output()
-        .map_err(|e| format!("the reviewer did not finish: {e}"))?;
-    // A reviewer that answers without reading closes the pipe first; that is its business, and the verdict it prints is still the verdict.
-    match writer.join() {
-        Err(_) => return Err("the brief was never written to the reviewer".to_string()),
-        Ok(Err(e)) if e.kind() != std::io::ErrorKind::BrokenPipe => {
-            return Err(format!("cannot brief the reviewer: {e}"));
+// The one thing the author supplies, judged before a review is paid for. A reviewer handed the case for a change grades the case instead of the change.
+pub fn judge(answer: &Answer, intent: &str) -> Result<(), String> {
+    for line in answer.text.lines() {
+        let Some(rest) = line.trim().strip_prefix(MARKER) else {
+            continue;
+        };
+        let rest = rest.trim();
+        if rest.starts_with(REFUSED) {
+            let said = rest
+                .trim_start_matches(REFUSED)
+                .trim_start_matches(['—', '-', ':', ' ']);
+            // What it said, beside the line it judged: the author has to see both to know which words to take out.
+            let mut detail = format!("the intent was refused — {said}\n\n  {intent}\n");
+            let rest_of = findings(&answer.text);
+            if !rest_of.is_empty() {
+                detail.push_str(&format!("\n{rest_of}\n"));
+            }
+            detail.push_str("\nState the aim and nothing else: what the change does, flatly.");
+            return Err(detail);
         }
-        Ok(_) => {}
+        if rest.starts_with("accepted") {
+            return Ok(());
+        }
     }
-    if !out.status.success() {
-        return Err(format!("the reviewer exited {}", out.status));
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    Err(format!(
+        "the intent judge answered with no `{MARKER} accepted` or `{MARKER} {REFUSED}` line"
+    ))
 }
 
 fn counts_from(fields: &str, simple: bool) -> Result<Counts, String> {
@@ -92,7 +66,7 @@ fn counts_from(fields: &str, simple: bool) -> Result<Counts, String> {
             format!("the reviewer's {MARKER} line has {name}={raw}, which is not a number")
         })?);
     }
-    // An advisory gate's brief never offers a MAJOR rung, so its reviewer is not asked for the count and the zero is recorded here. Reporting one anyway answers a brief it was not given.
+    // An advisory gate is never offered a MAJOR rung, so its reviewer is not asked for the count and the zero is recorded here. Reporting one anyway answers a brief it was not given.
     if simple && found[0].is_some_and(|major| major > 0) {
         return Err(
             "this gate is advisory and has no MAJOR rung, but its reviewer reported major>0"
@@ -130,23 +104,19 @@ pub fn findings(output: &str) -> String {
         .to_string()
 }
 
-// The reviewer's numbers are read here and never retyped by the author: that is the whole reason the tool runs the review rather than handing out a brief.
-pub fn verdicts(output: &str, simple: bool) -> Result<Vec<Verdict>, String> {
+// The reviewer's numbers are read here and never retyped by the author. Who reviewed, and on what session, come from the agent: the model would be guessing at one and cannot know the other.
+pub fn verdicts(answer: &Answer, simple: bool) -> Result<Vec<Verdict>, String> {
     let mut verdicts = Vec::new();
-    for line in output.lines() {
+    for line in answer.text.lines() {
         let Some(rest) = line.trim().strip_prefix(MARKER) else {
             continue;
         };
-        if rest.trim() == REFUSED {
-            let detail = "the reviewer refused the brief: an intent that argues for the change is graded instead of the change";
-            return Err(detail.to_string());
-        }
         verdicts.push(Verdict {
-            reviewer: required(rest, "reviewer")?,
+            reviewer: answer.reviewer.clone(),
             counts: counts_from(rest, simple)?,
             token: String::new(),
             resets: 0,
-            session: required(rest, "session")?,
+            session: answer.session.clone(),
         });
     }
     if verdicts.is_empty() {

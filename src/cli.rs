@@ -2,13 +2,16 @@
 
 pub const USAGE: &str = concat!(
     "usage: git-agent-verdict <msg-file> <gate> [--simple] [--override-prompt <path>]\n",
-    "                         --doc <path>... --path <pathspec>...\n",
-    "       git-agent-verdict attest --intent <one line>\n",
+    "                         (--doc <path> | --rule <text>)... --path <pathspec>...\n",
+    "       git-agent-verdict attest [--intent <one line>]\n",
     "       git-agent-verdict reset <reason>\n",
     "       git-agent-verdict --reviewer-prompt <gate>\n",
     "       git-agent-verdict --require-version <major.minor>\n",
     "       git-agent-verdict --repo-setup-guide"
 );
+
+// Undocumented on purpose, and in no usage line: the refusal below is the only place an agent meets it, which is the moment the reminder is worth anything.
+pub const BACKGROUND: &str = "--confirm-running-in-background-shell-with-long-timeout";
 
 // Verbs a dev agent types, as against a declaration a hook carries: mistyping one is not a repo whose wiring has gone stale, so the setup guide would be noise.
 pub fn agent_verb(args: &[String]) -> bool {
@@ -29,13 +32,14 @@ pub struct Invocation {
     pub msg_file: String,
     pub gate: String,
     pub docs: Vec<String>,
+    pub rules: Vec<String>,
     pub paths: Vec<String>,
     pub brief: Brief,
 }
 
 pub enum Mode {
     Gate(Box<Invocation>),
-    Attest(String),
+    Attest(Option<String>),
     Reset(String),
     ReviewerPrompt(String),
     RequireVersion(String),
@@ -60,8 +64,28 @@ fn gate_name(name: &str) -> Result<String, String> {
     Ok(name.to_string())
 }
 
+// A measure short enough to state in the hook, rather than a file the reviewer must open. It travels the declaration listing, which is tab-separated and line-based, so it is one line of its own.
+fn rule(text: String) -> Result<String, String> {
+    if text.trim().is_empty() {
+        return Err("--rule is empty".to_string());
+    }
+    if text.contains('\n') || text.contains('\t') {
+        return Err("--rule is one line, and carries no tab".to_string());
+    }
+    Ok(text)
+}
+
 fn canonical_docs(docs: &[String]) -> Result<Vec<String>, String> {
     docs.iter().map(|d| canonical("--doc", d)).collect()
+}
+
+// Dead by construction, not merely idle today: a pathspec that resolves to a file is a literal, and a gate built from nothing but its own rubrics meets its own measure or nothing. A glob resolves to no file and reaches whatever is added later, so it is never this.
+fn inert(docs: &[String], paths: &[String]) -> bool {
+    !docs.is_empty()
+        && paths.iter().all(|p| {
+            std::fs::canonicalize(p)
+                .is_ok_and(|full| docs.contains(&full.to_string_lossy().into_owned()))
+        })
 }
 
 #[derive(Default)]
@@ -71,8 +95,10 @@ struct Parsed {
     require_version: Option<String>,
     setup_guide: bool,
     intent: Option<String>,
+    background: bool,
     brief: Brief,
     docs: Vec<String>,
+    rules: Vec<String>,
     paths: Vec<String>,
 }
 
@@ -90,12 +116,16 @@ fn collect(args: impl Iterator<Item = String>) -> Result<Parsed, String> {
                 p.require_version = Some(args.next().ok_or("--require-version needs a version")?);
             }
             "--intent" => p.intent = Some(args.next().ok_or("--intent needs a line of text")?),
+            BACKGROUND => p.background = true,
             "--simple" => p.brief.simple = true,
             "--override-prompt" => {
                 let path = args.next().ok_or("--override-prompt needs a path")?;
                 p.brief.prompt = Some(canonical("--override-prompt", &path)?);
             }
             "--doc" => p.docs.push(args.next().ok_or("--doc needs a path")?),
+            "--rule" => p
+                .rules
+                .push(rule(args.next().ok_or("--rule needs a line of text")?)?),
             "--path" => p.paths.push(args.next().ok_or("--path needs a pathspec")?),
             flag if flag.starts_with('-') => return Err(format!("unknown flag '{flag}'")),
             value => p.positional.push(value.to_string()),
@@ -111,9 +141,11 @@ fn only(detail: &str, p: &Parsed, takes: &[&str]) -> Result<(), String> {
         ("--reviewer-prompt", p.reviewer_prompt.is_some()),
         ("--require-version", p.require_version.is_some()),
         ("--intent", p.intent.is_some()),
+        (BACKGROUND, p.background),
         ("--simple", p.brief.simple),
         ("--override-prompt", p.brief.prompt.is_some()),
         ("--doc", !p.docs.is_empty()),
+        ("--rule", !p.rules.is_empty()),
         ("--path", !p.paths.is_empty()),
         ("<positional>", !p.positional.is_empty()),
     ];
@@ -126,8 +158,26 @@ fn only(detail: &str, p: &Parsed, takes: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
+// Optional once a review has recorded one: the diary holds the aim, it may not change without a MAJOR, and retyping it can only fail.
+const FOREGROUND: &str = "a review reads every rubric in full and the whole staged diff, and often runs \
+for ten minutes or more.\nA foreground shell will kill it partway, and you pay for the half that ran.\
+\n\nStart it in a BACKGROUND shell with a long timeout, then say so:\n\n  \
+git agent-verdict attest --intent \"<the aim, one flat line>\" \\\n    \
+--confirm-running-in-background-shell-with-long-timeout\n\nThe flag asserts; it cannot check. \
+It is here because this is worth reading once, and this is when.";
+
 fn attest(p: &Parsed) -> Result<Mode, String> {
-    let intent = p.intent.clone().ok_or("attest needs --intent")?;
+    if !p.background {
+        return Err(FOREGROUND.to_string());
+    }
+    let Some(intent) = p.intent.clone() else {
+        only(
+            "attest takes --intent only: what each gate reviews comes from the commit-msg hook",
+            p,
+            &["<positional>", BACKGROUND],
+        )?;
+        return Ok(Mode::Attest(None));
+    };
     // An aim that will not fit is usually two aims: the limit is a decomposition check as much as a brevity one.
     if intent.contains('\n') || intent.chars().count() > INTENT_LIMIT {
         let detail = format!(
@@ -141,9 +191,9 @@ fn attest(p: &Parsed) -> Result<Mode, String> {
     only(
         "attest takes --intent only: what each gate reviews comes from the commit-msg hook",
         p,
-        &["--intent", "<positional>"],
+        &["--intent", "<positional>", BACKGROUND],
     )?;
-    Ok(Mode::Attest(intent))
+    Ok(Mode::Attest(Some(intent)))
 }
 
 // The reason is the whole point of the verb, so it is required rather than defaulted: an unexplained reset is the one this exists to make visible.
@@ -192,9 +242,9 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Mode, String> {
         only(detail, &p, &["--reviewer-prompt"])?;
         return Ok(Mode::ReviewerPrompt(gate));
     }
-    // A gate judging against nothing is a gate that has silently stopped judging, so an empty list is an error rather than a vacuous pass.
-    if p.docs.is_empty() {
-        return Err("at least one --doc is required".to_string());
+    // A gate judging against nothing is a gate that has silently stopped judging, so an empty measure is an error rather than a vacuous pass.
+    if p.docs.is_empty() && p.rules.is_empty() {
+        return Err("a gate needs at least one --doc or --rule to judge against".to_string());
     }
     let [msg_file, gate] = <[String; 2]>::try_from(p.positional).map_err(|got| {
         format!(
@@ -205,10 +255,17 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Mode, String> {
     if p.paths.is_empty() {
         return Err("at least one --path is required".to_string());
     }
+    let docs = canonical_docs(&p.docs)?;
+    if inert(&docs, &p.paths) {
+        return Err(format!(
+            "gate '{gate}': every --path names one of its own --doc files, so the only change it could ever review is a change to its own measure — which it cannot judge. It would skip every commit.\nWiden --path past the rubric, or let another gate's --path cover it."
+        ));
+    }
     Ok(Mode::Gate(Box::new(Invocation {
         msg_file,
         gate: gate_name(&gate)?,
-        docs: canonical_docs(&p.docs)?,
+        docs,
+        rules: p.rules,
         paths: p.paths,
         brief: p.brief,
     })))

@@ -8,18 +8,40 @@ const CLEAN: &str = "VERDICT: reviewer=fake session=s-01 major=0 moderate=1 mino
 const BLOCKER: &str = "VERDICT: reviewer=fake session=s-02 major=1 moderate=0 minor=0";
 const AIM: &str = "raise the staged file's line count";
 
-// Scoping is the pathspec plus the index, and the brief says so: the reviewer is told which files are in and that there are no others.
+// Scope is the gate's own pathspec, handed over as the command that applies it: an unscoped diff would show the reviewer files another gate owns.
 #[test]
-fn the_brief_names_the_staged_files_in_scope() {
+fn the_brief_scopes_the_diff_to_the_gates_pathspec() {
     let repo = Repo::new();
-    repo.write("other.rs", "more");
-    repo.declare(CLEAN, &[STANDARDS]);
+    let scoped = r#""$1" standards --doc rubric.md --path "*.rs""#;
+    repo.declare(CLEAN, &[scoped]);
     repo.stage(&["src.rs"]);
     let run = repo.capture(&["--reviewer-prompt", "standards"]);
     assert_eq!(run.code, 0, "{}", run.err);
-    assert!(run.out.contains("files under review"), "{}", run.out);
-    assert!(run.out.contains("src.rs"), "{}", run.out);
-    assert!(!run.out.contains("other.rs"), "{}", run.out);
+    assert!(
+        run.out.contains("git diff --cached -- '*.rs'"),
+        "{}",
+        run.out
+    );
+}
+
+// A doc is read in, not pointed at: a path is something a reviewer may skim or skip, and it is the same bytes every round.
+#[test]
+fn the_criteria_carry_the_documents_themselves() {
+    let repo = Repo::new();
+    repo.write("rubric.md", "the measure: every line earns its place");
+    repo.declare(CLEAN, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    let run = repo.capture(&["--reviewer-prompt", "standards"]);
+    assert!(
+        run.out.contains("<document title=\"rubric.md\">"),
+        "{}",
+        run.out
+    );
+    assert!(
+        run.out.contains("every line earns its place"),
+        "{}",
+        run.out
+    );
 }
 
 #[test]
@@ -50,10 +72,11 @@ fn a_blocked_gate_is_the_one_that_runs_again() {
     let repo = Repo::new();
     repo.declare(BLOCKER, &[STANDARDS, PROSE]);
     repo.stage(&["src.rs"]);
+    repo.attest(AIM);
     for _ in 0..2 {
-        let run = repo.attest(AIM);
-        assert!(run.err.contains("standards:"), "{}", run.err);
-        assert!(!run.err.contains("prose:"), "{}", run.err);
+        let run = repo.again();
+        assert!(run.out.contains("standards:"), "{}", run.out);
+        assert!(!run.out.contains("prose:"), "{}", run.out);
     }
 }
 
@@ -64,9 +87,9 @@ fn gates_are_reviewed_in_the_order_the_hook_declares_them() {
     repo.declare(CLEAN, &[STANDARDS, second_gate]);
     repo.stage(&["src.rs"]);
     let first = repo.attest(AIM);
-    assert!(first.err.contains("standards:"), "{}", first.err);
-    let second = repo.attest(AIM);
-    assert!(second.err.contains("ann:"), "{}", second.err);
+    assert!(first.out.contains("standards:"), "{}", first.out);
+    let second = repo.again();
+    assert!(second.out.contains("ann:"), "{}", second.out);
     let message = repo.landed(AIM, 2);
     assert!(message.contains("Reviewed-standards:"), "{message}");
     assert!(message.contains("Reviewed-ann:"), "{message}");
@@ -97,49 +120,74 @@ fn an_advisory_reviewer_reporting_a_major_is_refused() {
     assert!(!repo.committed(), "an advisory major committed anyway");
 }
 
-// A verdict describes the content its reviewer saw. Fixing what it named moves that content — that is the work — so the gate opens again rather than landing a trailer about text that no longer exists.
+// Acting on a MODERATE or a MINOR moves content, and a round keyed on that resamples advice for ever: every review of a taste-adjacent rubric returns something.
 #[test]
-fn content_moving_after_its_verdict_reopens_the_gate() {
+fn a_fix_after_a_passing_verdict_does_not_review_again() {
     let repo = Repo::new();
-    let counting = r#"n=$(cat rounds 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > rounds; echo "VERDICT: reviewer=fake session=s-$n major=0 moderate=$n minor=0""#;
+    let counting = r#"n=$(cat rounds 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > rounds; echo "VERDICT: reviewer=fake session=s-1 major=0 moderate=$n minor=0""#;
     repo.declare_runner(counting, &[STANDARDS]);
     repo.stage(&["src.rs"]);
     repo.attest(AIM);
-    repo.write("src.rs", "the line the fix added");
+    repo.write("src.rs", "the fix the review asked for");
     repo.stage(&["src.rs"]);
-    let message = repo.landed(AIM, 3);
-    assert_eq!(repo.read("rounds").trim(), "2", "{message}");
-    assert!(message.contains("moderate=2"), "{message}");
-    assert!(!message.contains("moderate=1"), "{message}");
-}
-
-#[test]
-fn a_verdict_stands_while_its_content_does_not_move() {
-    let repo = Repo::new();
-    let counting = r#"n=$(cat rounds 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > rounds; echo "VERDICT: reviewer=fake session=s-$n major=0 moderate=1 minor=0""#;
-    repo.declare_runner(counting, &[STANDARDS]);
-    repo.stage(&["src.rs"]);
-    let message = repo.landed(AIM, 3);
+    let message = repo.landed_again(3);
     assert_eq!(repo.read("rounds").trim(), "1", "{message}");
+    assert!(message.contains("moderate=1"), "{message}");
 }
 
-// A fresh reviewer resamples a rubric it has never seen, which is how counts wander between rounds that fixed nothing. The runner decides whether to resume; the tool only hands it the session.
+// MAJOR is the rung that re-opens a gate, and the round after it is the one that wants the reviewer's own context.
 #[test]
-fn a_re_review_is_handed_the_session_of_the_last_one() {
+fn a_blocked_gate_reviews_again_and_is_handed_its_session() {
     let repo = Repo::new();
-    let recording = r#"echo "[$AGENT_VERDICT_PRIOR_SESSION]" >> handed; echo "VERDICT: reviewer=fake session=s-99 major=0 moderate=0 minor=0""#;
-    repo.declare_runner(recording, &[STANDARDS]);
+    let escalating = concat!(
+        r#"n=$(cat rounds 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > rounds; "#,
+        r#"echo "[$AGENT_VERDICT_PRIOR_SESSION]" >> handed; m=0; if [ "$n" = 1 ]; then m=1; fi; "#,
+        r#"echo "VERDICT: reviewer=fake session=s-1 major=$m moderate=0 minor=0""#
+    );
+    repo.declare_runner(escalating, &[STANDARDS]);
     repo.stage(&["src.rs"]);
-    repo.attest(AIM);
-    repo.write("src.rs", "moved");
+    let blocked = repo.attest(AIM);
+    assert_eq!(blocked.code, 1, "{}", blocked.err);
+    repo.write("src.rs", "reworked");
     repo.stage(&["src.rs"]);
-    repo.attest(AIM);
+    let message = repo.landed_again(3);
+    assert_eq!(repo.read("rounds").trim(), "2", "{message}");
     assert_eq!(
         repo.read("handed"),
-        "[]\n[s-99]\n",
+        "[]\n[s-1]\n",
         "{}",
         repo.read("handed")
     );
+    assert!(message.contains("major=0"), "{message}");
+}
+
+// A reviewer whose session carried over holds the aim, the documents and the ladder already. Sending them again invites the whole sweep a second time instead of a look at what moved.
+#[test]
+fn a_reviewer_that_resumed_is_briefed_only_on_what_changed() {
+    let repo = Repo::new();
+    let recording = concat!(
+        r#"n=$(cat n 2>/dev/null || echo 0); cat > prompt-$n; "#,
+        r#"cp "$AGENT_VERDICT_SYSTEM" system-$n; echo $((n+1)) > n; "#,
+        r#"m=0; if [ "$n" = 0 ]; then m=1; fi; "#,
+        r#"echo "VERDICT: reviewer=fake session=s-1 major=$m moderate=0 minor=0""#
+    );
+    repo.declare_runner(recording, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    repo.attest(AIM);
+    repo.write("src.rs", "reworked");
+    repo.stage(&["src.rs"]);
+    repo.again();
+    let (first, second) = (repo.read("prompt-0"), repo.read("prompt-1"));
+    assert!(
+        first.contains(&format!("<diff-intent>{AIM}</diff-intent>")),
+        "{first}"
+    );
+    assert!(second.starts_with("Fixes incorporated"), "{second}");
+    // Handed over once and unchanged, which is the whole of what a cache needs.
+    let standing = repo.read("system-0");
+    assert_eq!(standing, repo.read("system-1"));
+    assert!(standing.contains("<grading-criteria>"), "{standing}");
+    assert!(!standing.contains(AIM), "the aim is not in the cached half");
 }
 
 // A pathspec is written against the root because that is where git runs a hook, and one resolved from a subdirectory passes a gate on a fraction of the change without saying so.
@@ -154,7 +202,23 @@ fn a_gate_reviews_the_same_files_from_any_directory() {
     let from_sub = repo.capture_in("sub", &["--reviewer-prompt", "standards"]);
     assert_eq!(from_sub.code, 0, "{}", from_sub.err);
     assert_eq!(from_root.out, from_sub.out, "{}", from_sub.out);
-    assert!(from_sub.out.contains("src.rs"), "{}", from_sub.out);
+    assert!(
+        from_sub.out.contains("<document title="),
+        "{}",
+        from_sub.out
+    );
+}
+
+// The pin is the one line enumeration honours. Read past it, attest would review against a declaration nobody has established this release can parse — and pay for it before git ever runs the hook that refuses.
+#[test]
+fn a_hook_pinned_to_another_line_refuses_before_a_review_is_paid_for() {
+    let repo = Repo::new();
+    repo.declare(CLEAN, &["--require-version 99.0", STANDARDS]);
+    repo.stage(&["src.rs"]);
+    let run = repo.attest(AIM);
+    assert!(run.err.contains("--version '^99.0'"), "{}", run.err);
+    assert!(!run.err.contains("judging the intent"), "{}", run.err);
+    assert!(!repo.committed(), "{}", run.err);
 }
 
 // Enumerating the hook must not act on it: under `set -e` a mode that refuses during the listing kills the hook, and every gate below it leaves the listing.
@@ -165,8 +229,8 @@ fn a_staged_rubric_still_lets_attest_read_the_hook() {
     repo.stage(&["src.rs", "rubric.md"]);
     let run = repo.attest(AIM);
     assert!(!run.err.contains("declared no gates"), "{}", run.err);
-    assert!(run.err.contains("RUBRIC IS STAGED"), "{}", run.err);
-    assert!(!repo.committed(), "a mixed rubric commit landed anyway");
+    assert!(run.err.contains("can never be attested"), "{}", run.err);
+    assert!(!repo.committed(), "a rubric commit landed anyway");
 }
 
 // The brief is the one input the author still writes, so it may not drift between the gates of one commit.
@@ -178,7 +242,7 @@ fn the_intent_cannot_change_between_gates() {
     repo.attest(AIM);
     let run = repo.attest("something else entirely");
     assert_eq!(run.code, 2, "{}", run.err);
-    assert!(run.err.contains("only change after a MAJOR"), "{}", run.err);
+    assert!(run.err.contains("does not move"), "{}", run.err);
 }
 
 // The limit bounds the change, not the prose: an aim needing more than a line is more than one commit.
@@ -188,47 +252,78 @@ fn an_intent_naming_more_than_one_change_is_refused_with_the_remedy() {
     repo.declare(CLEAN, &[STANDARDS]);
     repo.stage(&["src.rs"]);
     let two_changes = "x".repeat(301);
-    let run = repo.capture(&["attest", "--intent", &two_changes]);
+    let run = repo.capture(&[
+        "attest",
+        "--intent",
+        &two_changes,
+        "--confirm-running-in-background-shell-with-long-timeout",
+    ]);
     assert_eq!(run.code, 2, "{}", run.err);
     assert!(run.err.contains("commit them separately"), "{}", run.err);
 }
 
-// The guard the cap cannot enforce: a brief well under the limit can still argue, and the reviewer is what catches it.
+// Undocumented, so the refusal is the only place an agent meets it: a review runs for many minutes, and a foreground shell kills it partway.
 #[test]
-fn a_reviewer_that_refuses_the_brief_records_nothing() {
+fn attest_refuses_a_run_that_has_not_acknowledged_the_background_shell() {
     let repo = Repo::new();
-    repo.declare("VERDICT: refused", &[STANDARDS]);
+    repo.declare(CLEAN, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    let run = repo.capture(&["attest", "--intent", AIM]);
+    assert_eq!(run.code, 2, "{}", run.err);
+    assert!(run.err.contains("BACKGROUND shell"), "{}", run.err);
+    assert!(!repo.committed(), "a foreground attest reviewed anyway");
+}
+
+// Named in no usage line and no guide: an agent that has read either still meets it at the first review, which is when it is worth reading.
+#[test]
+fn the_background_flag_is_documented_nowhere() {
+    let repo = Repo::new();
+    let help = repo.capture(&["--help"]);
+    let guide = repo.capture(&["--repo-setup-guide"]);
+    assert!(!help.out.contains("background"), "{}", help.out);
+    assert!(!guide.out.contains("background"), "{}", guide.out);
+}
+
+// The guard the cap cannot enforce: an aim well under the limit can still argue, and the judge is what catches it — before a review is paid for.
+#[test]
+fn an_intent_the_judge_refuses_costs_no_review() {
+    let repo = Repo::new();
+    repo.declare(CLEAN, &[STANDARDS]);
+    repo.judge("VERDICT: refused — gives a reason");
     repo.stage(&["src.rs"]);
     let run = repo.attest("add the cache because the old path was far too slow");
     assert_eq!(run.code, 2, "{}", run.err);
-    assert!(run.err.contains("refused the brief"), "{}", run.err);
-    assert!(!repo.committed(), "a refused brief committed anyway");
+    assert!(run.err.contains("intent was refused"), "{}", run.err);
+    assert!(run.err.contains("gives a reason"), "{}", run.err);
+    assert!(!repo.committed(), "a refused intent committed anyway");
 }
 
-// The hole the old guard had: an advisory gate could not block on a refusal, so a contaminated brief passed unnoticed.
+// The aim is judged before any gate is chosen, so an advisory-only hook is held to it exactly as a blocking one is.
 #[test]
-fn an_advisory_gate_refuses_a_contaminated_brief_too() {
+fn an_advisory_only_hook_still_judges_the_intent() {
     let repo = Repo::new();
-    repo.declare("VERDICT: refused", &[PROSE]);
+    repo.declare(CLEAN, &[PROSE]);
+    repo.judge("VERDICT: refused — defends the approach");
     repo.stage(&["src.rs"]);
     let run = repo.attest("add the cache because the old path was far too slow");
     assert_eq!(run.code, 2, "{}", run.err);
-    assert!(run.err.contains("refused the brief"), "{}", run.err);
+    assert!(run.err.contains("intent was refused"), "{}", run.err);
 }
 
-// The brief states the line it will be read by, so a field it omits is a broken contract, not a value to invent.
+// The counts are the whole of what the line carries now, so one missing is the broken contract. Who reviewed and on what session come from the agent.
 #[test]
-fn a_verdict_line_missing_a_required_field_is_refused() {
+fn a_verdict_line_missing_a_count_is_refused() {
     for missing in [
-        "VERDICT: session=s-1 major=0 moderate=0 minor=0",
-        "VERDICT: reviewer=fake major=0 moderate=0 minor=0",
+        "VERDICT: moderate=0 minor=0",
+        "VERDICT: major=0 minor=0",
+        "VERDICT: major=0 moderate=0",
     ] {
         let repo = Repo::new();
         repo.declare(missing, &[STANDARDS]);
         repo.stage(&["src.rs"]);
         let run = repo.attest(AIM);
         assert_eq!(run.code, 2, "{missing}: {}", run.err);
-        assert!(run.err.contains("carries no"), "{missing}: {}", run.err);
+        assert!(run.err.contains("needs major="), "{missing}: {}", run.err);
     }
 }
 

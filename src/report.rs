@@ -19,30 +19,16 @@ fn shape(inv: &Invocation) -> String {
 
 // The remedy is one command: the tool runs the review itself, so nothing here asks the author to brief anyone.
 pub fn missing(inv: &Invocation, detail: &str) {
-    eprintln!("\ngit-agent-verdict: {}: REVIEW GATE FAILED\n", inv.gate);
+    eprintln!(
+        "\ngit-agent-verdict: error: {}: no reviewable trailer\n",
+        inv.gate
+    );
     eprintln!("  missing: {detail}");
     eprintln!("  wanted:  {}\n", shape(inv));
     eprintln!("  git agent-verdict attest --intent \"<the aim, one flat line>\"\n");
     eprintln!("  - runs each gate in turn, records what the reviewer reported");
     eprintln!("  - commits once every gate is attested");
     eprintln!("  - composes the message from --intent; this message file is discarded");
-}
-
-pub fn circular(gate: &str, rubrics: &[String]) {
-    eprintln!("\ngit-agent-verdict: {gate}: RUBRIC IS STAGED\n");
-    eprintln!("  {}\n", rubrics.join("\n  "));
-    eprintln!("  circular: the {gate} review judges against a measure this commit changes");
-    eprintln!("  - stage the rubric alone and attest: {gate} stands aside, and any gate whose");
-    eprintln!("    --path reaches it still reviews it");
-    eprintln!("  - every other change stays in its own commit, and still needs its review");
-}
-
-// Not a refusal: its measure is the whole of what is staged, so there is no other change for this gate to judge and nothing to separate the rubric from.
-pub fn abstained(gate: &str, rubrics: &[String]) {
-    eprintln!(
-        "git-agent-verdict: {gate}: stood aside — the commit is only its measure ({})",
-        rubrics.join(", ")
-    );
 }
 
 fn summarize(verdicts: &[Verdict]) -> String {
@@ -57,7 +43,7 @@ pub fn attested(gate: &str, count: usize, verdicts: &[Verdict]) {
 }
 
 pub fn blocked(gate: &str, major: u32) {
-    eprintln!("\ngit-agent-verdict: {gate}: DECLARED BLOCKER");
+    eprintln!("\ngit-agent-verdict: error: {gate}: declared blocker");
     eprintln!("  major={major} (must be 0)");
     eprintln!("  - fix what the review named; the remedy is yours");
     eprintln!("  - the gate reopens only on a fresh attest of {gate}");
@@ -65,32 +51,32 @@ pub fn blocked(gate: &str, major: u32) {
 
 // A trailer whose token names no entry is the one thing a well-formed forgery looks like, so it says what it is rather than what is malformed.
 pub fn untraceable(gate: &str, token: &str) {
-    eprintln!("\ngit-agent-verdict: {gate}: UNKNOWN TOKEN\n");
+    eprintln!("\ngit-agent-verdict: error: {gate}: unknown token\n");
     eprintln!("  token={token} matches no review recorded for this HEAD");
     eprintln!("  - run: git agent-verdict attest --intent \"…\"");
     eprintln!("    it reviews what is left, then commits with trailers it can trace");
 }
 
 pub fn mismatch(gate: &str, detail: &str) {
-    eprintln!("\ngit-agent-verdict: {gate}: TRAILER CONTRADICTS THE REVIEW\n  {detail}");
+    eprintln!("\ngit-agent-verdict: error: {gate}: trailer contradicts the review\n  {detail}");
 }
 
 // The install command is in the line: the reader is a hook's stderr, and an agent told only that the binary is wrong will otherwise invent one.
 pub fn stale(want: &str, have: &str) {
     eprintln!(
-        "git-agent-verdict: {have} is older than the required {want}: cargo install git-agent-verdict --version '^{want}'"
+        "git-agent-verdict: error: {have} is older than the required {want}: cargo install git-agent-verdict --version '^{want}'"
     );
 }
 
 // Named apart from stale because the remedy is the opposite one: the binary is ahead, and what a hook declares was written against a grammar this release no longer speaks.
 pub fn incompatible(want: &str, have: &str) {
     eprintln!(
-        "git-agent-verdict: {have} is not the {want} line this hook declares its gates against: cargo install git-agent-verdict --version '^{want}'"
+        "git-agent-verdict: error: {have} is not the {want} line this hook declares its gates against: cargo install git-agent-verdict --version '^{want}'"
     );
 }
 
 pub fn malformed(gate: &str, detail: &str) {
-    eprintln!("\ngit-agent-verdict: {gate}: MALFORMED TRAILER\n  {detail}");
+    eprintln!("\ngit-agent-verdict: error: {gate}: malformed trailer\n  {detail}");
 }
 
 // Outside the repo and outside the diary: the diary is dropped the moment HEAD moves, which is exactly when an author wants to re-read what the review said about the commit that just landed.
@@ -119,13 +105,41 @@ pub fn logged(gate: &str, findings: &str) -> Option<std::path::PathBuf> {
     Some(path)
 }
 
-pub fn reviewing(gate: &str, again: bool) {
-    let why = if again {
-        " again — the content changed since its last verdict"
-    } else {
-        ""
-    };
-    eprintln!("git-agent-verdict: {gate}: reviewing…{why}");
+// Named inline: this is a routine class of commit, and the reader needs which files and what to do, not the argument for it.
+pub fn maintenance(files: &[String]) {
+    eprintln!(
+        "git-agent-verdict: error: {} can never be attested — part of the rubric and infra this tool scores by.",
+        files.join(", ")
+    );
+    eprintln!("Review manually and commit with --no-verify.");
+}
+
+pub fn judging() {
+    eprintln!("git-agent-verdict: judging the intent…");
+}
+
+// Where each gate stands once a run is over, and why it is not in play when it is not. Nothing is under review by then, so there is no running state to show.
+pub enum Standing {
+    Passed(String),
+    Blocked(String),
+    Waiting,
+    Skipped(String),
+}
+
+// The whole board, every round: the count in play moves when a fix touches a file another gate's pathspec reaches, so a bare fraction would shrink and grow with nothing saying why.
+pub fn gates(standings: &[(String, Standing)]) {
+    let width = standings.iter().map(|(g, _)| g.len()).max().unwrap_or(0);
+    eprintln!("\nagent-verdict gates mandated by repo:");
+    for (gate, standing) in standings {
+        let said = match standing {
+            Standing::Passed(counts) => format!("PASSED - {counts}"),
+            Standing::Blocked(counts) => format!("BLOCKED - {counts}, fix and attest again"),
+            Standing::Waiting => "PENDING".to_string(),
+            Standing::Skipped(paths) => format!("SKIPPED - nothing staged matches {paths}"),
+        };
+        eprintln!("  {gate:width$}  [{said}]");
+    }
+    eprintln!();
 }
 
 pub fn reviewed(
@@ -134,6 +148,7 @@ pub fn reviewed(
     blocked: bool,
     next: Option<&str>,
     findings: &str,
+    standings: &[(String, Standing)],
 ) {
     // The verdict on stdout, the report on disk: a review runs to hundreds of lines, and an author reading the tail of a stream misses the findings above it.
     println!("{gate}: {}", summarize(verdicts));
@@ -143,16 +158,16 @@ pub fn reviewed(
             None => eprintln!("\n{findings}"),
         }
     }
-    eprintln!();
+    gates(standings);
     if blocked {
-        eprintln!("MAJOR — gate not passed. Fix what the review named, then attest again.");
+        eprintln!("git-agent-verdict: error: MAJOR — gate not passed. Fix what the review named, then attest again.");
         return;
     }
     match next {
-        Some(gate) => eprintln!("next: address the findings, then attest again for the {gate} gate"),
-        None => eprintln!(
-            "next: attest again, same intent — no gate left, so that run writes the trailers and commits"
-        ),
+        Some(gate) => {
+            eprintln!("next: address the findings, then attest again for {gate}");
+        }
+        None => eprintln!("next: attest again — every gate is through, so that run commits"),
     }
 }
 
@@ -170,37 +185,6 @@ pub fn committed(trailers: &[String], out: &str) {
     // The counts reach the message from the diary rather than from whoever read the review, and nothing in between could have retyped them.
     for line in trailers {
         eprintln!("  {line}");
-    }
-}
-
-// A staged path no gate read, and which of the two reasons it was.
-pub struct Unread {
-    pub file: String,
-    // The gate that covers it and is judged by it, where one does: it stood aside rather than measuring a change to its own measure.
-    pub judged_by: Option<String>,
-}
-
-// A trailer says what a gate read, never what it did not: without this, the paths nothing reached look covered by the verdicts beside them.
-pub fn unreviewed(unread: &[Unread]) {
-    if unread.is_empty() {
-        return;
-    }
-    let width = unread.iter().map(|u| u.file.len()).max().unwrap_or(0);
-    eprintln!("\ngit-agent-verdict: LANDING UNREVIEWED\n");
-    for u in unread {
-        let why = match &u.judged_by {
-            Some(gate) => format!("{gate} is judged by it, and stood aside"),
-            None => "no gate's --path reaches it".to_string(),
-        };
-        eprintln!("  {:width$}  {why}", u.file);
-    }
-    if unread.iter().any(|u| u.judged_by.is_some()) {
-        eprintln!("\n  Standing aside is the design: a gate cannot measure a change to its own");
-        eprintln!("  measure. Another gate's --path may still cover it — none here does.");
-    }
-    if unread.iter().any(|u| u.judged_by.is_none()) {
-        eprintln!("\n  A path nothing reaches is wiring: widen a --path, or accept that this");
-        eprintln!("  commit attests nothing about it.");
     }
 }
 

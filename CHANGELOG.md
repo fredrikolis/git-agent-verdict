@@ -4,6 +4,48 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [1.4.0] - 2026-08-13
+
+### Added
+- `--rule <text>`: a measure stated in the hook, where a document would be more than the check is
+  worth. A gate needs at least one `--doc` or `--rule`.
+- The intent is judged before any review is paid for, by the same agent at its cheapest model.
+- attest refuses a run that has not acknowledged a background shell. A review runs for many minutes
+  and a foreground one kills it partway.
+- A gate board after every run: where each gate stands, and why the ones out of play are out. What
+  is left to review moves when a fix touches a path another gate reaches, so a count would not say it.
+- A gate whose every `--path` names one of its own `--doc` files is refused where the declaration is
+  read: it could only ever meet a change to its own measure, so it would skip every commit.
+- A declaration the hook cannot get past fails the whole run. It used to vanish from the listing,
+  leaving the repo one gate lighter than the hook says with nothing saying so.
+- Staging the commit-msg hook or any `--doc` is refused as maintenance rather than reviewed:
+  whoever changes what the repo gates by is the only one who could review it, which is no review at
+  all. It lands on its own with `--no-verify`, and the work behind it in a commit of its own. A
+  rubric kept outside the repo is never staged and never meets this.
+
+### Fixed
+- `--require-version` never fired while `attest` read the hook. Enumeration answered every mode with
+  success, so a hook pinned to another line was read anyway and its reviews paid for, and the pin
+  only refused at the final `git commit`. The pin is now the one line enumeration honours.
+
+### Changed
+- `agent-verdict.runner` names an agent — `claude` — rather than a command line. Resuming, standing
+  instructions and machine-readable output differ too much between agents to express in shell.
+- A gate's standing instructions go to the agent's system prompt with every rubric inlined, so the
+  same bytes are cached across rounds and commits; only the intent varies.
+- `--intent` is refused on a later run of the same commit. The aim does not move.
+- Every diagnostic follows the unix form `git-agent-verdict: error: <what>`, replacing the
+  capitalised headers. Progress lines carry no label.
+
+### Removed
+- `reviewer=` and `session=` from what the reviewer is asked to report. The tool reads both from the
+  agent, which knows them.
+- Per-gate rubric circularity — the skip when a commit was only a gate's own measure, and the
+  refusal when it was mixed with work. Both are subsumed: no rubric edit is reviewed at all.
+- The `LANDING UNREVIEWED` notice. A staged path no gate's `--path` reaches is the maintainer's
+  declaration, not something the committer can act on, and a mechanical pre-commit gate this tool
+  cannot see may cover it more strictly than a review would. The gate board says which gates ran.
+
 ## [1.3.0] - 2026-08-13
 
 ### Changed
