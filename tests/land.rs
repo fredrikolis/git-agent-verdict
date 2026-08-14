@@ -92,7 +92,10 @@ fn a_reset_is_counted_and_keeps_its_reason() {
     repo.declare(CLEAN, &[STANDARDS]);
     repo.stage(&["src.rs"]);
     repo.attest(AIM);
-    let run = repo.capture(&["reset", "the", "brief", "named", "the", "wrong", "aim"]);
+    let root = repo.root();
+    let run = repo.capture(&[
+        "reset", "--repo", &root, "the", "brief", "named", "the", "wrong", "aim",
+    ]);
     assert_eq!(run.code, 0, "{}", run.err);
     assert!(run.err.contains("reset 1"), "{}", run.err);
 
@@ -105,7 +108,8 @@ fn a_reset_is_counted_and_keeps_its_reason() {
 fn a_reset_without_a_reason_is_refused() {
     let repo = Repo::new();
     repo.declare(CLEAN, &[STANDARDS]);
-    let run = repo.capture(&["reset"]);
+    let root = repo.root();
+    let run = repo.capture(&["reset", "--repo", &root]);
     assert_eq!(run.code, 2, "{}", run.err);
     assert!(run.err.contains("needs a reason"), "{}", run.err);
 }

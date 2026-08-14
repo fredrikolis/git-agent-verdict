@@ -31,7 +31,7 @@ wiring is the maintainer's to fix, and the agent hitting it has no other way to 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
-git agent-verdict --require-version 1.4
+git agent-verdict --require-version 1.5
 git agent-verdict "$1" standards   --doc docs/repo-standards.md --path .
 git agent-verdict "$1" annotations --simple --doc docs/annotation-guide.md --path .
 git agent-verdict "$1" prose       --simple --doc docs/communication-style.md \
@@ -64,7 +64,7 @@ Each line is the whole declaration of its gate, which is what lets the tool brie
 as that gate will judge — it re-runs this hook to read the declarations rather than keeping a second
 copy in a config file.
 
-A pin, not a floor. `1.4` names a compatibility line: every additive `1.x` satisfies it, and `2.0.0`
+A pin, not a floor. `1.5` names a compatibility line: every additive `1.x` satisfies it, and `2.0.0`
 will not, because a major release may take a flag away or change what a trailer must carry. A hook
 written against the old grammar cannot tell on its own, and finds out when a commit dies on an
 unknown flag. Both directions are refused: too old cannot answer what the hook asks, and a later
@@ -81,12 +81,12 @@ tries to commit. The commit fails by design, and the gate prints one command.
 
 ```console
 $ git commit -m "…"
-git-agent-verdict: standards: REVIEW GATE FAILED
+git-agent-verdict: error: standards: no reviewable trailer
 
   missing: the message needs this trailer and has none
   wanted:  Reviewed-standards: reviewer=<id> major=<n> moderate=<n> minor=<n> token=<issued>
 
-  git agent-verdict attest --intent "<the aim, one flat line>"
+  git agent-verdict attest --repo /home/me/src/my-repo --intent "<the aim, one flat line>"
 
   - runs each gate in turn, records what the reviewer reported
   - commits once every gate is attested
@@ -101,14 +101,27 @@ when the editing does, and a trailer never attests text that is no longer there.
 needed on the first run of a commit; the aim is held, and may not change without a MAJOR.
 
 ```console
-$ git agent-verdict attest --intent "the commit-msg hook delegates verdict verification to a CLI"
-git-agent-verdict: standards: reviewing…
+$ git agent-verdict attest --repo /home/me/src/my-repo \
+    --intent "the commit-msg hook delegates verdict verification to a CLI" \
+    --confirm-running-in-background-shell-with-long-timeout
+git-agent-verdict: judging the intent…
 standards: major=0 moderate=1 minor=1
 
 see the full report: ~/.agent-verdicts/my-repo-3f9a1c04/4da9793…-1-standards.log
 
-next: address the findings, then attest again for the annotations gate
+agent-verdict gates mandated by repo:
+  standards    [PASSED - major=0 moderate=1 minor=1]
+  annotations  [PENDING]
+  prose        [SKIPPED - nothing staged matches *.md]
+
+next: address the findings, then attest again for annotations
 ```
+
+`--repo` is the repo root, absolute, and the shell's directory is never consulted. An agent holding
+one shell open across a long task is often not standing where it believes; naming the tree puts that
+assumption in the command line, where the transcript records it. `attest` also refuses while the
+index and the working tree disagree on any file a gate reviews — the reviewer opens those files, and
+the commit carries the index.
 
 **Nothing is handed to the agent to forward.** The brief goes from the tool to the reviewer, and the
 counts come back the same way. The agent supplies one thing — `--intent`.

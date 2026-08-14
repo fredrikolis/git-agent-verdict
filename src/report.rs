@@ -17,6 +17,11 @@ fn shape(inv: &Invocation) -> String {
     format!("{key}: reviewer=<id> {COUNTS_SHAPE} token=<issued>")
 }
 
+// Named here rather than left as a placeholder, and safe to paste: git ran this hook in the tree being committed, so the root under it is not a shell's guess about where it is.
+fn here() -> String {
+    git::toplevel().unwrap_or_else(|_| "<abs path to the repo root>".to_string())
+}
+
 // The remedy is one command: the tool runs the review itself, so nothing here asks the author to brief anyone.
 pub fn missing(inv: &Invocation, detail: &str) {
     eprintln!(
@@ -25,7 +30,10 @@ pub fn missing(inv: &Invocation, detail: &str) {
     );
     eprintln!("  missing: {detail}");
     eprintln!("  wanted:  {}\n", shape(inv));
-    eprintln!("  git agent-verdict attest --intent \"<the aim, one flat line>\"\n");
+    eprintln!(
+        "  git agent-verdict attest --repo {} --intent \"<the aim, one flat line>\"\n",
+        here()
+    );
     eprintln!("  - runs each gate in turn, records what the reviewer reported");
     eprintln!("  - commits once every gate is attested");
     eprintln!("  - composes the message from --intent; this message file is discarded");
@@ -53,7 +61,10 @@ pub fn blocked(gate: &str, major: u32) {
 pub fn untraceable(gate: &str, token: &str) {
     eprintln!("\ngit-agent-verdict: error: {gate}: unknown token\n");
     eprintln!("  token={token} matches no review recorded for this HEAD");
-    eprintln!("  - run: git agent-verdict attest --intent \"…\"");
+    eprintln!(
+        "  - run: git agent-verdict attest --repo {} --intent \"…\"",
+        here()
+    );
     eprintln!("    it reviews what is left, then commits with trailers it can trace");
 }
 
@@ -112,6 +123,15 @@ pub fn maintenance(files: &[String]) {
         files.join(", ")
     );
     eprintln!("Review manually and commit with --no-verify.");
+}
+
+// The verdict says the staged content was reviewed. A reviewer opens files to read them in context, so where the worktree and the index disagree it reviewed something the commit will not carry, and the trailer would say otherwise.
+pub fn drifted(files: &[String]) {
+    eprintln!(
+        "git-agent-verdict: error: the index and the working tree disagree on {}.",
+        files.join(", ")
+    );
+    eprintln!("The reviewer opens the files; the commit carries the index. Stage or restore them.");
 }
 
 pub fn judging() {

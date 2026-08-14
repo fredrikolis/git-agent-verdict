@@ -209,6 +209,47 @@ fn a_gate_reviews_the_same_files_from_any_directory() {
     );
 }
 
+// The verdict claims the staged content was reviewed, and a reviewer opens files to read them in context. Where the two disagree it reviewed what the commit will not carry — right repo, wrong tree state.
+#[test]
+fn an_unstaged_edit_to_a_reviewed_file_refuses_before_reviewing() {
+    let repo = Repo::new();
+    repo.declare(CLEAN, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    repo.write("src.rs", "edited after staging, never added");
+    let run = repo.attest(AIM);
+    assert_eq!(run.code, 1, "{}", run.err);
+    assert!(
+        run.err.contains("index and the working tree disagree"),
+        "{}",
+        run.err
+    );
+    // Before the cheapest call the run makes, so nothing was spent on it.
+    assert!(!run.err.contains("judging the intent"), "{}", run.err);
+    assert!(!repo.committed(), "{}", run.err);
+}
+
+// Staging one change and carrying on with another is ordinary git. Only the files a gate actually reviews have to agree with the index.
+#[test]
+fn an_unstaged_edit_no_gate_reviews_is_left_alone() {
+    let repo = Repo::new();
+    let scoped = r#""$1" standards --doc rubric.md --path "*.rs""#;
+    repo.declare(CLEAN, &[scoped]);
+    repo.write("notes.txt", "tracked");
+    repo.stage(&["notes.txt", "src.rs", "rubric.md"]);
+    common::git(&repo.dir, &["commit", "--no-verify", "-q", "-m", "base"]);
+    repo.write("notes.txt", "edited, and no gate reads it");
+    repo.write("src.rs", "the change under review");
+    repo.stage(&["src.rs"]);
+    let run = repo.attest("raise the staged file's line count");
+    assert!(
+        !run.err.contains("index and the working tree disagree"),
+        "{}",
+        run.err
+    );
+    let message = repo.landed_again(3);
+    assert!(message.contains("Reviewed-standards:"), "{message}");
+}
+
 // The pin is the one line enumeration honours. Read past it, attest would review against a declaration nobody has established this release can parse — and pay for it before git ever runs the hook that refuses.
 #[test]
 fn a_hook_pinned_to_another_line_refuses_before_a_review_is_paid_for() {
@@ -252,8 +293,11 @@ fn an_intent_naming_more_than_one_change_is_refused_with_the_remedy() {
     repo.declare(CLEAN, &[STANDARDS]);
     repo.stage(&["src.rs"]);
     let two_changes = "x".repeat(301);
+    let root = repo.root();
     let run = repo.capture(&[
         "attest",
+        "--repo",
+        &root,
         "--intent",
         &two_changes,
         "--confirm-running-in-background-shell-with-long-timeout",

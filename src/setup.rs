@@ -56,10 +56,15 @@ const GUIDE: &str = r#"WIRING A REPO — git-agent-verdict
 
 4. Commit through the tool, not through git:
 
-     git agent-verdict attest --intent "<the aim, one flat line>"
+     git agent-verdict attest --repo /abs/path/to/this/repo \
+       --intent "<the aim, one flat line>"
 
    One gate per run, in declaration order. It records what the reviewer reported and commits once
    every gate is attested. The message is composed from --intent; nothing is handed back to paste.
+
+   --repo is the repo root, absolute, and the shell's directory is never consulted. A shell held
+   open for an hour is often not where its owner believes; naming the tree puts that assumption in
+   the command line, where it can be read back.
 
    Fixing what a review named re-opens its gate, so run attest again after each fix. --intent is
    only needed on the first run."#;

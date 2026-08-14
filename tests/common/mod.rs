@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+pub const BACKGROUND: &str = "--confirm-running-in-background-shell-with-long-timeout";
 pub const BIN: &str = env!("CARGO_BIN_EXE_git-agent-verdict");
 static SEQ: AtomicU32 = AtomicU32::new(0);
 
@@ -77,8 +78,14 @@ impl Repo {
 
     // Where the caller stands is not where a hook's paths are written from: an agent runs attest from wherever it happens to be.
     pub fn capture_in(&self, subdir: &str, args: &[&str]) -> Run {
+        let cwd = self.dir.join(subdir);
+        self.capture_at(&cwd, args)
+    }
+
+    // The shell's directory and the repo under test, told apart: this repo's stub reviewer stays on PATH wherever the caller is standing, so no test can reach a real agent by wandering off.
+    pub fn capture_at(&self, cwd: &Path, args: &[&str]) -> Run {
         let out = Command::new(BIN)
-            .current_dir(self.dir.join(subdir))
+            .current_dir(cwd)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
             // The stub agent goes first: the tool runs `claude` by name, so this is where a test's reviewer is substituted.
@@ -118,16 +125,20 @@ impl Repo {
         (run.code, run.err)
     }
 
-    // Every run carries the flag a fresh agent is refused for forgetting: the harness is not the reader that nudge is for.
-    const BACKGROUND: &str = "--confirm-running-in-background-shell-with-long-timeout";
+    // Every run names the repo, because the tool no longer reads it from where the caller stands.
+    pub fn root(&self) -> String {
+        self.dir.to_string_lossy().into_owned()
+    }
 
     // The aim is stated on the first run of a commit and held; every later run simply asks again.
     pub fn attest(&self, intent: &str) -> Run {
-        self.capture(&["attest", "--intent", intent, Self::BACKGROUND])
+        let root = self.root();
+        self.capture(&["attest", "--repo", &root, "--intent", intent, BACKGROUND])
     }
 
     pub fn again(&self) -> Run {
-        self.capture(&["attest", Self::BACKGROUND])
+        let root = self.root();
+        self.capture(&["attest", "--repo", &root, BACKGROUND])
     }
 
     // One declaration per line, run through the binary by absolute path: a name resolves from PATH, which passes on a box with the tool installed and fails in CI.

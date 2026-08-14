@@ -148,6 +148,19 @@ fn land(hook: &Hook, steps: &[state::Step], intent: &str) -> Result<bool, String
 
 pub fn run(asked: Option<&str>) -> Result<bool, String> {
     let hook = declarations::read()?;
+    // Every gate asked at once, before the first review rather than before each: a run that pays for one gate and then refuses at the next has spent the money either way.
+    let mut drifting: Vec<String> = Vec::new();
+    for declaration in &hook.gates {
+        for file in git::unstaged(&declaration.paths)? {
+            if !drifting.contains(&file) {
+                drifting.push(file);
+            }
+        }
+    }
+    if !drifting.is_empty() {
+        report::drifted(&drifting);
+        return Ok(false);
+    }
     // Asked before a review is paid for, and refused for the same reason the gate refuses it at commit time.
     let staged_machinery = gate::machinery_staged()?;
     if !staged_machinery.is_empty() {

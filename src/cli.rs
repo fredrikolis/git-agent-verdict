@@ -3,8 +3,8 @@
 pub const USAGE: &str = concat!(
     "usage: git-agent-verdict <msg-file> <gate> [--simple] [--override-prompt <path>]\n",
     "                         (--doc <path> | --rule <text>)... --path <pathspec>...\n",
-    "       git-agent-verdict attest [--intent <one line>]\n",
-    "       git-agent-verdict reset <reason>\n",
+    "       git-agent-verdict attest --repo <abs path> [--intent <one line>]\n",
+    "       git-agent-verdict reset --repo <abs path> <reason>\n",
     "       git-agent-verdict --reviewer-prompt <gate>\n",
     "       git-agent-verdict --require-version <major.minor>\n",
     "       git-agent-verdict --repo-setup-guide"
@@ -39,8 +39,9 @@ pub struct Invocation {
 
 pub enum Mode {
     Gate(Box<Invocation>),
-    Attest(Option<String>),
-    Reset(String),
+    // The repo comes first because nothing else means anything without it: the verb acts on the tree named here and never on the one the shell is standing in.
+    Attest(String, Option<String>),
+    Reset(String, String),
     ReviewerPrompt(String),
     RequireVersion(String),
     RepoSetupGuide,
@@ -95,6 +96,7 @@ struct Parsed {
     require_version: Option<String>,
     setup_guide: bool,
     intent: Option<String>,
+    repo: Option<String>,
     background: bool,
     brief: Brief,
     docs: Vec<String>,
@@ -116,6 +118,7 @@ fn collect(args: impl Iterator<Item = String>) -> Result<Parsed, String> {
                 p.require_version = Some(args.next().ok_or("--require-version needs a version")?);
             }
             "--intent" => p.intent = Some(args.next().ok_or("--intent needs a line of text")?),
+            "--repo" => p.repo = Some(args.next().ok_or("--repo needs an absolute path")?),
             BACKGROUND => p.background = true,
             "--simple" => p.brief.simple = true,
             "--override-prompt" => {
@@ -141,6 +144,7 @@ fn only(detail: &str, p: &Parsed, takes: &[&str]) -> Result<(), String> {
         ("--reviewer-prompt", p.reviewer_prompt.is_some()),
         ("--require-version", p.require_version.is_some()),
         ("--intent", p.intent.is_some()),
+        ("--repo", p.repo.is_some()),
         (BACKGROUND, p.background),
         ("--simple", p.brief.simple),
         ("--override-prompt", p.brief.prompt.is_some()),
@@ -158,11 +162,29 @@ fn only(detail: &str, p: &Parsed, takes: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
+// Named, never inferred: a shell an agent has held open for an hour is often not standing where the agent believes, and a verb that reads its target from that shell reviews whichever repo the mistake landed in. What is asserted here reaches the transcript, where it can be read back afterwards.
+fn target(p: &Parsed) -> Result<String, String> {
+    let Some(path) = p.repo.clone() else {
+        // No value offered, deliberately: whatever this printed would be derived from the same shell the flag exists to distrust, and pasted straight back.
+        return Err(
+            "--repo <absolute path to the repo root> is required, and the shell's directory is not consulted"
+                .to_string(),
+        );
+    };
+    if !std::path::Path::new(&path).is_absolute() {
+        return Err(format!(
+            "--repo {path}: an absolute path. A relative one is the shell's directory again, under another name."
+        ));
+    }
+    Ok(path)
+}
+
 // Optional once a review has recorded one: the diary holds the aim, it may not change without a MAJOR, and retyping it can only fail.
 const FOREGROUND: &str = "a review reads every rubric in full and the whole staged diff, and often runs \
 for ten minutes or more.\nA foreground shell will kill it partway, and you pay for the half that ran.\
 \n\nStart it in a BACKGROUND shell with a long timeout, then say so:\n\n  \
-git agent-verdict attest --intent \"<the aim, one flat line>\" \\\n    \
+git agent-verdict attest --repo <abs path to the repo root> \\\n    \
+--intent \"<the aim, one flat line>\" \\\n    \
 --confirm-running-in-background-shell-with-long-timeout\n\nThe flag asserts; it cannot check. \
 It is here because this is worth reading once, and this is when.";
 
@@ -170,13 +192,14 @@ fn attest(p: &Parsed) -> Result<Mode, String> {
     if !p.background {
         return Err(FOREGROUND.to_string());
     }
+    let repo = target(p)?;
     let Some(intent) = p.intent.clone() else {
         only(
-            "attest takes --intent only: what each gate reviews comes from the commit-msg hook",
+            "attest takes --repo and --intent only: what each gate reviews comes from the commit-msg hook",
             p,
-            &["<positional>", BACKGROUND],
+            &["--repo", "<positional>", BACKGROUND],
         )?;
-        return Ok(Mode::Attest(None));
+        return Ok(Mode::Attest(repo, None));
     };
     // An aim that will not fit is usually two aims: the limit is a decomposition check as much as a brevity one.
     if intent.contains('\n') || intent.chars().count() > INTENT_LIMIT {
@@ -189,15 +212,16 @@ fn attest(p: &Parsed) -> Result<Mode, String> {
         return Err("--intent is empty".to_string());
     }
     only(
-        "attest takes --intent only: what each gate reviews comes from the commit-msg hook",
+        "attest takes --repo and --intent only: what each gate reviews comes from the commit-msg hook",
         p,
-        &["--intent", "<positional>", BACKGROUND],
+        &["--intent", "--repo", "<positional>", BACKGROUND],
     )?;
-    Ok(Mode::Attest(Some(intent)))
+    Ok(Mode::Attest(repo, Some(intent)))
 }
 
 // The reason is the whole point of the verb, so it is required rather than defaulted: an unexplained reset is the one this exists to make visible.
 fn reset(p: &Parsed) -> Result<Mode, String> {
+    let repo = target(p)?;
     let reason = p.positional[1..].join(" ");
     if reason.trim().is_empty() {
         return Err(
@@ -205,11 +229,11 @@ fn reset(p: &Parsed) -> Result<Mode, String> {
         );
     }
     only(
-        "reset takes a reason only: it clears the diary and asks nothing of a gate",
+        "reset takes --repo and a reason only: it clears the diary and asks nothing of a gate",
         p,
-        &["<positional>"],
+        &["--repo", "<positional>"],
     )?;
-    Ok(Mode::Reset(reason))
+    Ok(Mode::Reset(repo, reason))
 }
 
 pub fn parse(args: impl Iterator<Item = String>) -> Result<Mode, String> {

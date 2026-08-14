@@ -35,6 +35,12 @@ pub fn staged(paths: &[String]) -> Result<Vec<String>, String> {
     Ok(nul_separated(&run(&args)?))
 }
 
+// The worktree against the index, where staged() asks the index against HEAD. A file that differs here is one the reviewer opens and the commit will not carry.
+pub fn unstaged(paths: &[String]) -> Result<Vec<String>, String> {
+    let args = with_pathspec(&["diff", "--name-only", "-z"], paths);
+    Ok(nul_separated(&run(&args)?))
+}
+
 // A literal pathspec matching nothing in the index is a typo; a glob is allowed to match nothing.
 pub fn unmatched_literals(paths: &[String]) -> Result<Vec<String>, String> {
     let mut bad = Vec::new();

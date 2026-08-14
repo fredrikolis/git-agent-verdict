@@ -77,6 +77,19 @@ fn at_repo_root() {
     }
 }
 
+// The named tree, and nothing near it: a path that is not a repo root is the near miss worth refusing, since a submodule taken for its parent reviews the wrong thing and looks like success while doing it.
+fn enter(repo: &str) -> Result<(), String> {
+    std::env::set_current_dir(repo).map_err(|e| format!("--repo {repo}: {e}"))?;
+    let root = git::toplevel()?;
+    let same = |p: &str| std::fs::canonicalize(p).ok();
+    if same(repo) != same(&root) {
+        return Err(format!(
+            "--repo {repo} is not a repo root. The root it sits under is:\n  {root}"
+        ));
+    }
+    Ok(())
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     at_repo_root();
@@ -116,8 +129,11 @@ fn main() -> ExitCode {
     }
     let (label, outcome) = match &mode {
         Mode::Gate(inv) => (inv.gate.as_str(), gate::check(inv)),
-        Mode::Attest(intent) => ("attest", attest::run(intent.as_deref())),
-        Mode::Reset(reason) => ("reset", attest::reset(reason)),
+        Mode::Attest(repo, intent) => (
+            "attest",
+            enter(repo).and_then(|()| attest::run(intent.as_deref())),
+        ),
+        Mode::Reset(repo, reason) => ("reset", enter(repo).and_then(|()| attest::reset(reason))),
         Mode::ReviewerPrompt(gate) => ("reviewer-prompt", reviewer_prompt(gate)),
         Mode::RequireVersion(want) => ("require-version", require_version(want)),
         Mode::RepoSetupGuide => ("repo-setup-guide", {

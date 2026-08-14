@@ -4,6 +4,24 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [1.5.0] - 2026-08-14
+
+### Added
+- `attest` and `reset` take `--repo <absolute path>`, and the shell's directory is no longer
+  consulted. An agent holding one shell open across a long task is often not standing where it
+  believes, and the verb would review whichever repo the mistake landed in. Naming the tree puts the
+  assumption in argv, where the transcript records it, and lets one shell drive several repos. The
+  path must be absolute and must be the repo root; a relative one is the shell's directory again,
+  and a subdirectory is a submodule taken for its parent. The refusal for a missing `--repo` offers
+  no value to paste, since anything it printed would come from the shell it exists to distrust.
+- `attest` refuses while the index and the working tree disagree on any file a gate reviews. The
+  verdict claims the staged content was reviewed, and a reviewer opens files to read them in
+  context, so where the two disagree it reviewed what the commit will not carry. Scoped to each
+  gate's own `--path`, so staging one change and carrying on with another still works.
+
+### Changed
+- The remedies a gate prints name the repo root, which git supplied by running the hook there.
+
 ## [1.4.1] - 2026-08-13
 
 ### Fixed

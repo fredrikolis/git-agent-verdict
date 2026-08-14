@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{Repo, BIN, DUMMY, STANDARDS};
+use common::{Repo, BACKGROUND, BIN, DUMMY, STANDARDS};
 
 #[test]
 fn an_unattested_commit_fails_and_names_the_remedy() {
@@ -14,7 +14,11 @@ fn an_unattested_commit_fails_and_names_the_remedy() {
         out.contains("error: standards: no reviewable trailer"),
         "{out}"
     );
-    assert!(out.contains("attest --intent"), "{out}");
+    assert!(out.contains("attest --repo "), "{out}");
+    assert!(
+        out.contains(&repo.root()),
+        "the remedy names this repo: {out}"
+    );
 }
 
 // A hand-written trailer is well-formed and names nothing: the counts in a message are worth only as much as the review they can be traced to.
@@ -221,6 +225,67 @@ fn a_stale_declaration_prints_the_whole_setup_guide() {
     assert!(out.contains("agent-verdict.runner"), "{out}");
 }
 
+const PASSES: &str = "VERDICT: reviewer=fake session=s-01 major=0 moderate=0 minor=0";
+
+// The whole point of the flag: an agent's shell is often not standing where the agent believes, and the verb acts on the tree it was told about rather than the one it happens to be in.
+#[test]
+fn attest_acts_on_the_named_repo_from_anywhere() {
+    let repo = Repo::new();
+    let elsewhere = Repo::new();
+    repo.declare(PASSES, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    let root = repo.root();
+    let run = repo.capture_at(
+        &elsewhere.dir,
+        &[
+            "attest",
+            "--repo",
+            &root,
+            "--intent",
+            "raise the staged file's line count",
+            BACKGROUND,
+        ],
+    );
+    assert!(run.out.contains("standards:"), "{}", run.err);
+    assert!(!elsewhere.committed(), "it acted on the shell's repo");
+}
+
+// Whatever this printed would be read off the same shell the flag exists to distrust, and pasted straight back.
+#[test]
+fn a_missing_repo_offers_no_value_to_paste() {
+    let repo = Repo::new();
+    repo.declare(PASSES, &[STANDARDS]);
+    let (code, out) = repo.bare(&["attest", "--intent", "an aim", BACKGROUND]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("shell's directory is not consulted"), "{out}");
+    assert!(!out.contains(&repo.root()), "it suggested a path: {out}");
+}
+
+// A relative path is the shell's directory again under another name.
+#[test]
+fn a_relative_repo_is_refused() {
+    let repo = Repo::new();
+    repo.declare(PASSES, &[STANDARDS]);
+    let (code, out) = repo.bare(&["attest", "--repo", ".", "--intent", "an aim", BACKGROUND]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("an absolute path"), "{out}");
+}
+
+// A near miss looks like success: a submodule taken for its parent reviews the wrong tree and says nothing.
+#[test]
+fn a_repo_that_is_not_the_root_is_refused() {
+    let repo = Repo::new();
+    repo.declare(PASSES, &[STANDARDS]);
+    let inside = format!("{}/sub", repo.root());
+    std::fs::create_dir_all(&inside).expect("subdir");
+    let (code, out) = repo.bare(&[
+        "attest", "--repo", &inside, "--intent", "an aim", BACKGROUND,
+    ]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("is not a repo root"), "{out}");
+    assert!(out.contains(&repo.root()), "{out}");
+}
+
 // attest is the dev agent's own interface: mistyping it says nothing about the repo's wiring, and a guide it cannot act on buries the one line that names the fault.
 #[test]
 fn a_mistyped_agent_verb_gets_the_usage_and_not_the_guide() {
@@ -248,7 +313,7 @@ fn the_setup_guide_answers_outside_a_repo() {
     assert_eq!(out.status.code(), Some(0), "{text}");
     assert!(text.contains("core.hooksPath .githooks"), "{text}");
     assert!(text.contains("agent-verdict.runner"), "{text}");
-    assert!(text.contains("attest --intent"), "{text}");
+    assert!(text.contains("attest --repo"), "{text}");
 }
 
 #[test]
