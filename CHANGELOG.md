@@ -4,6 +4,14 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [1.4.1] - 2026-08-13
+
+### Fixed
+- A `--doc` outside the worktree blocked every gated commit. The staged-rubric check passed it to
+  `git diff --cached`, which goes fatal on a pathspec it cannot place, so the refusal fired whether
+  or not a rubric was staged. A rubric kept outside the repo — `$KB/standards.md`, as the setup
+  guide tells a repo to keep one — can never be staged, and is not asked about.
+
 ## [1.4.0] - 2026-08-13
 
 ### Added

@@ -55,6 +55,15 @@ impl Repo {
         std::fs::write(self.dir.join(name), body).expect("write");
     }
 
+    // A rubric the repo can never stage, which is how the setup guide tells a repo to keep one: `$KB/standards.md`, expanded by the hook's own shell.
+    pub fn write_outside(&self, name: &str, body: &str) -> String {
+        let path = self.dir.with_extension("outside");
+        std::fs::create_dir_all(&path).expect("outside dir");
+        let file = path.join(name);
+        std::fs::write(&file, body).expect("write outside");
+        file.to_string_lossy().into_owned()
+    }
+
     pub fn stage(&self, paths: &[&str]) {
         for p in paths {
             git(&self.dir, &["add", p]);

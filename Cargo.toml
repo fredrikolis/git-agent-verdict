@@ -2,7 +2,7 @@
 
 [package]
 name = "git-agent-verdict"
-version = "1.4.0"
+version = "1.4.1"
 edition = "2021"
 description = "Verify that a commit message carries an attested review verdict"
 license = "MIT"

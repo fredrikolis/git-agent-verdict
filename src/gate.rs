@@ -20,25 +20,24 @@ fn auto_generated(raw: &str) -> bool {
     }
 }
 
-// Repo-relative, as git matches it: the hook path arrives relative to the root already, and only a --doc is absolute.
-fn in_repo(path: &str) -> String {
+// Repo-relative, as git matches it, and None for a path outside the worktree: git goes fatal on a pathspec it cannot place, and a rubric kept outside the repo — the $KB case the setup guide documents — can never be staged, so there is nothing to ask git about.
+fn in_repo(path: &str) -> Option<String> {
     if std::path::Path::new(path).is_absolute() {
-        git::relative_to_root(path).unwrap_or_else(|| path.to_string())
+        git::relative_to_root(path)
     } else {
-        path.to_string()
+        Some(path.to_string())
     }
 }
 
 // What the repo gates by: the hook naming the gates, and every measure they judge against. A change to either is reviewed by the maintainer who made it, which is no review at all — so it is maintenance, out of scope here, and lands on its own.
 pub fn machinery_staged() -> Result<Vec<String>, String> {
     let mut watched: Vec<String> = Vec::new();
-    if let Ok(hook) = git::hook_path() {
-        watched.push(in_repo(&hook));
+    if let Some(hook) = git::hook_path().ok().and_then(|h| in_repo(&h)) {
+        watched.push(hook);
     }
     if let Ok(hook) = declarations::read() {
         for gate in &hook.gates {
-            for doc in &gate.docs {
-                let doc = in_repo(doc);
+            for doc in gate.docs.iter().filter_map(|d| in_repo(d)) {
                 if !watched.contains(&doc) {
                     watched.push(doc);
                 }

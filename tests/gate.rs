@@ -134,6 +134,21 @@ fn another_gates_rubric_is_refused_as_well() {
     assert!(out.contains("style.md"), "{out}");
 }
 
+// A rubric outside the worktree can never be staged, so it is nothing to ask git about — and git goes fatal on a pathspec it cannot place, which blocked every commit in a repo wired the way the setup guide tells it to be.
+#[test]
+fn a_doc_outside_the_repo_does_not_reach_git() {
+    let repo = Repo::new();
+    let outside = repo.write_outside("standards.md", "the measure, kept elsewhere");
+    let gate = format!(r#""$1" standards --doc {outside} --path "*.rs""#);
+    repo.declare(DUMMY, &[&gate]);
+    repo.stage(&["src.rs"]);
+    let (code, out) = repo.run(DUMMY, &["standards", "--doc", &outside, "--path", "*.rs"]);
+    assert!(!out.contains("fatal"), "{out}");
+    assert!(!out.contains("outside repository"), "{out}");
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("unknown token"), "{out}");
+}
+
 // A gate built from nothing but its own rubric would meet a refusal at every commit it ever saw. Refused where the declaration is read: a gate that never judges is one the repo believes it has.
 #[test]
 fn a_gate_that_could_only_ever_meet_its_own_rubric_is_refused() {
