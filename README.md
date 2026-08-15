@@ -31,7 +31,7 @@ wiring is the maintainer's to fix, and the agent hitting it has no other way to 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
-git agent-verdict --require-version 1.6
+git agent-verdict --require-version 1.7
 git agent-verdict "$1" standards   --model opus --doc docs/repo-standards.md --path .
 git agent-verdict "$1" annotations --simple --model haiku --doc docs/annotation-guide.md --path .
 git agent-verdict "$1" prose       --simple --doc docs/communication-style.md \
@@ -70,7 +70,7 @@ Each line is the whole declaration of its gate, which is what lets the tool brie
 as that gate will judge — it re-runs this hook to read the declarations rather than keeping a second
 copy in a config file.
 
-A pin, not a floor. `1.6` names a compatibility line: every additive `1.x` satisfies it, and `2.0.0`
+A pin, not a floor. `1.7` names a compatibility line: every additive `1.x` satisfies it, and `2.0.0`
 will not, because a major release may take a flag away or change what a trailer must carry. A hook
 written against the old grammar cannot tell on its own, and finds out when a commit dies on an
 unknown flag. Both directions are refused: too old cannot answer what the hook asks, and a later
@@ -122,6 +122,12 @@ agent-verdict gates mandated by repo:
 
 next: address the findings, then attest again for annotations
 ```
+
+Run `attest` directly. It holds the repo for as long as it runs, and a second one refuses at once,
+naming the pid that holds it and how long it has been held — so there is nothing to guard against
+and no reason to wrap it in a wait loop. A hand-built guard is where this goes wrong: a `pgrep -f`
+on the attest command line matches the wrapping shell's own arguments and waits for ever, and the
+tell is that nothing runs at all.
 
 `--repo` is the repo root, absolute, and the shell's directory is never consulted. An agent holding
 one shell open across a long task is often not standing where it believes; naming the tree puts that

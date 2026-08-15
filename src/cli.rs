@@ -193,7 +193,8 @@ for ten minutes or more.\nA foreground shell will kill it partway, and you pay f
 git agent-verdict attest --repo <abs path to the repo root> \\\n    \
 --intent \"<the aim, one flat line>\" \\\n    \
 --confirm-running-in-background-shell-with-long-timeout\n\nThe flag asserts; it cannot check. \
-It is here because this is worth reading once, and this is when.";
+It is here because this is worth reading once, and this is when.\n\nRun it directly — no wait loop. \
+attest holds the repo while it runs, and a second one refuses at once naming what holds it.";
 
 fn attest(p: &Parsed) -> Result<Mode, String> {
     if !p.background {

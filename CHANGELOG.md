@@ -4,6 +4,21 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [1.7.0] - 2026-08-15
+
+### Added
+- `attest` and `reset` hold the repo while they run, and a second one refuses at once — naming the
+  pid that holds it and for how long, so the caller can tell a live run from a hung one. The diary
+  is read, added to and written back, so two runs at once review the same gate, pay for it twice,
+  and the second to finish drops the first's verdict. A caller had no way to serialise this but to
+  build a guard by hand, and a `pgrep -f` on the attest command line matches the wrapping shell's
+  own arguments and waits for ever.
+- The setup guide, the README and the foreground refusal all say to run it directly, with no wait
+  loop.
+- A claim left behind by a killed run is taken over: it carries the pid and the program running
+  under it, and is believed only while both still hold. A repo no command can enter again would be
+  worse than the race the claim prevents.
+
 ## [1.6.0] - 2026-08-15
 
 ### Added

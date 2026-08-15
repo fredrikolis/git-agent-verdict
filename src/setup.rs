@@ -69,7 +69,11 @@ const GUIDE: &str = r#"WIRING A REPO — git-agent-verdict
    the command line, where it can be read back.
 
    Fixing what a review named re-opens its gate, so run attest again after each fix. --intent is
-   only needed on the first run."#;
+   only needed on the first run.
+
+   Run it directly. Do not wrap it in a wait loop: attest holds the repo for as long as it runs,
+   and a second one refuses at once, naming the pid holding it and for how long. A guard built
+   from pgrep matches its own wrapper's command line and waits for ever."#;
 
 pub fn guide() -> String {
     GUIDE.replace("{{line}}", &line())

@@ -283,6 +283,57 @@ fn an_unknown_model_is_the_hooks_fault_and_says_so() {
     assert!(!repo.committed(), "{}", run.err);
 }
 
+// Two runs at once review the same gate, pay for it twice, and the second to finish writes the diary the first already wrote. A caller that guards against this by hand writes the wait loop that never ends; the tool holds the claim so nobody has to.
+#[test]
+fn a_second_attest_is_refused_while_one_is_running() {
+    let repo = Repo::new();
+    repo.declare(CLEAN, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    let exe = std::env::current_exe().expect("exe");
+    let held = format!(
+        "{}\t0\t{}",
+        std::process::id(),
+        exe.file_name().expect("name").to_string_lossy()
+    );
+    repo.write(".git/agent-verdict.lock", &held);
+    let run = repo.attest(AIM);
+    assert_eq!(run.code, 2, "{}", run.err);
+    assert!(
+        run.err.contains("another attest is already running"),
+        "{}",
+        run.err
+    );
+    assert!(run.err.contains("Wait for it, or kill it"), "{}", run.err);
+    assert!(!run.err.contains("judging the intent"), "{}", run.err);
+}
+
+// A run that was killed leaves its claim behind, and a repo no command can enter again is worse than the race the claim prevents.
+#[test]
+fn a_claim_left_by_a_dead_run_is_taken_over() {
+    let repo = Repo::new();
+    repo.declare(CLEAN, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    repo.write(
+        ".git/agent-verdict.lock",
+        "999999999\t0\t/nowhere/git-agent-verdict",
+    );
+    let run = repo.attest(AIM);
+    assert!(run.out.contains("standards:"), "{}", run.err);
+}
+
+// Nothing is holding it once the run is over, or the next attest meets its own leftovers.
+#[test]
+fn the_claim_is_released_when_the_run_ends() {
+    let repo = Repo::new();
+    repo.declare(CLEAN, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    repo.attest(AIM);
+    assert!(
+        !repo.dir.join(".git/agent-verdict.lock").exists(),
+        "the claim outlived the run"
+    );
+}
+
 // The pin is the one line enumeration honours. Read past it, attest would review against a declaration nobody has established this release can parse — and pay for it before git ever runs the hook that refuses.
 #[test]
 fn a_hook_pinned_to_another_line_refuses_before_a_review_is_paid_for() {

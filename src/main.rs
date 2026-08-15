@@ -7,6 +7,7 @@ mod cli;
 mod declarations;
 mod gate;
 mod git;
+mod lock;
 mod report;
 mod runner;
 mod setup;
@@ -129,11 +130,21 @@ fn main() -> ExitCode {
     }
     let (label, outcome) = match &mode {
         Mode::Gate(inv) => (inv.gate.as_str(), gate::check(inv)),
+        // Held across the whole run, and dropped with it: the diary is read, added to and written back, so two runs at once review the same gate, pay for it twice, and the second to finish drops the first's verdict.
         Mode::Attest(repo, intent) => (
             "attest",
-            enter(repo).and_then(|()| attest::run(intent.as_deref())),
+            enter(repo).and_then(|()| {
+                let _held = lock::take()?;
+                attest::run(intent.as_deref())
+            }),
         ),
-        Mode::Reset(repo, reason) => ("reset", enter(repo).and_then(|()| attest::reset(reason))),
+        Mode::Reset(repo, reason) => (
+            "reset",
+            enter(repo).and_then(|()| {
+                let _held = lock::take()?;
+                attest::reset(reason)
+            }),
+        ),
         Mode::ReviewerPrompt(gate) => ("reviewer-prompt", reviewer_prompt(gate)),
         Mode::RequireVersion(want) => ("require-version", require_version(want)),
         Mode::RepoSetupGuide => ("repo-setup-guide", {
