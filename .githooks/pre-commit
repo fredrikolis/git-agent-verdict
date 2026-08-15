@@ -12,7 +12,10 @@ case ":$PATH:" in *":$cargo_bin:"*) ;; *) PATH="$cargo_bin:$PATH" ;; esac
 export PATH
 
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace --quiet
+# --locked, so a stale Cargo.lock is refused here rather than rewritten. Without it a version
+# bump commits the old lock — `git add` snapshots it before this hook rebuilds — and the manifest
+# and the lockfile disagree in the tag, which is where `cargo publish` finally says so.
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked --quiet
 annotated-tree --strict-check --include-tests .
 cargo lint-extra --config .cargo-lint-extra.toml .

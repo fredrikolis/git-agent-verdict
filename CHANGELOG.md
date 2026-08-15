@@ -4,6 +4,19 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [1.7.1] - 2026-08-15
+
+### Fixed
+- The claim `attest` holds did nothing on macOS. Whether a pid was still running was read from
+  /proc, which macOS does not have, so every live claim read as dead and was taken over — a guard
+  that appeared to hold the repo while holding nothing. Asked of `ps` instead, which answers on
+  both.
+- The 1.7.0 tag carried a `Cargo.lock` a version behind its `Cargo.toml`: `git add` snapshots the
+  lockfile before the pre-commit hook rebuilds and rewrites it, so a version bump commits the old
+  one. It builds and tests clean and fails only at `cargo publish`, after the tag is public.
+  `--locked` in the hook and in CI refuses a stale lockfile where it is made instead. 1.7.0 never
+  reached crates.io; this is the release that carries the claim.
+
 ## [1.7.0] - 2026-08-15
 
 ### Added

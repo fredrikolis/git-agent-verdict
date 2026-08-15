@@ -33,14 +33,20 @@ fn mine() -> String {
     )
 }
 
-// A number alone would wedge a repo for ever once pids came round again on a box that had been up a while, so the claim carries what is running under it and is only believed while that still matches.
+// A number alone would wedge a repo once pids came round again, so the claim carries what runs under it and is believed only while that matches. Asked of `ps`, not /proc, which macOS lacks: there every pid reads as dead and every claim is stolen — a guard holding nothing while appearing to. A box that cannot answer keeps its claim, since taking it anyway is the race again.
 fn running(pid: &str, exe: &str) -> bool {
-    let Ok(raw) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
-        return false;
+    let Ok(out) = std::process::Command::new("ps")
+        .args(["-p", pid, "-o", "args="])
+        .output()
+    else {
+        return true;
     };
+    if !out.status.success() {
+        return false;
+    }
     // argv[0] alone, so a process merely carrying the name in an argument is not mistaken for one of these.
-    let text = String::from_utf8_lossy(&raw);
-    text.split('\0')
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.split_whitespace()
         .next()
         .is_some_and(|argv0| base(argv0) == exe)
 }
@@ -54,14 +60,15 @@ fn holder(text: &str) -> Option<(String, u64, String)> {
 }
 
 // A refusal rather than a wait: waiting is what the caller would have written by hand, and a wait that never ends is the failure this exists to prevent. How long it has been held is the number that says whether to wait or to kill.
-fn refusal(text: &str) -> Option<String> {
+fn refusal(text: &str, path: &std::path::Path) -> Option<String> {
     let (pid, since, exe) = holder(text)?;
     if !running(&pid, &exe) {
         return None;
     }
     let held = now().saturating_sub(since);
     Some(format!(
-        "another attest is already running in this repo — pid {pid}, {held}s so far.\nOne at a time: two runs review the same gate, pay for it twice, and the second to finish drops the first's verdict.\nWait for it, or kill it."
+        "another attest is already running in this repo — pid {pid}, {held}s so far.\nOne at a time: two runs review the same gate, pay for it twice, and the second to finish drops the first's verdict.\nWait for it, or kill it. The claim is {}.",
+        path.display()
     ))
 }
 
@@ -81,7 +88,7 @@ pub fn take() -> Result<Held, String> {
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 let text = std::fs::read_to_string(&path).unwrap_or_default();
-                if let Some(said) = refusal(&text) {
+                if let Some(said) = refusal(&text, &path) {
                     return Err(said);
                 }
                 // Nothing is running under it: a run that was killed leaves this behind, and a repo no command can enter again is worse than the race the claim prevents.

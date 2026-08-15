@@ -30,10 +30,12 @@ jobs:
           git config --global init.defaultBranch main
       - name: Format
         run: cargo fmt --check
+      # --locked here too: a tag whose Cargo.lock disagrees with its Cargo.toml
+      # builds fine and only fails at `cargo publish`, after the tag is public.
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --locked -- -D warnings
       - name: Test
-        run: cargo test --all
+        run: cargo test --all --locked
 
   # The same two linters .githooks/pre-commit runs, at the same pinned versions.
   # A version bump belongs in one commit that also clears whatever the new one finds.
