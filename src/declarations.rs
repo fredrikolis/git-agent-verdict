@@ -11,6 +11,8 @@ pub struct Declaration {
     pub docs: Vec<String>,
     pub rules: Vec<String>,
     pub paths: Vec<String>,
+    // Which model reviews this gate, as the repo asked for it: the intensity a gate is worth is the repo's call, not one this tool makes for it.
+    pub model: Option<String>,
     pub brief: Brief,
 }
 
@@ -23,6 +25,9 @@ pub fn emit_gate(inv: &Invocation) {
     let mut fields = vec![inv.gate.clone()];
     if inv.brief.simple {
         fields.push("simple".to_string());
+    }
+    if let Some(model) = &inv.model {
+        fields.push(format!("model={model}"));
     }
     if let Some(path) = &inv.brief.prompt {
         fields.push(format!("prompt={path}"));
@@ -39,6 +44,7 @@ fn read_gate(gate: &str, fields: std::str::Split<'_, char>) -> Option<Declaratio
         docs: Vec::new(),
         rules: Vec::new(),
         paths: Vec::new(),
+        model: None,
         brief: Brief::default(),
     };
     for field in fields {
@@ -48,6 +54,8 @@ fn read_gate(gate: &str, fields: std::str::Split<'_, char>) -> Option<Declaratio
             declaration.rules.push(text.to_string());
         } else if let Some(path) = field.strip_prefix("path=") {
             declaration.paths.push(path.to_string());
+        } else if let Some(name) = field.strip_prefix("model=") {
+            declaration.model = Some(name.to_string());
         } else if let Some(path) = field.strip_prefix("prompt=") {
             declaration.brief.prompt = Some(path.to_string());
         } else if field == "simple" {

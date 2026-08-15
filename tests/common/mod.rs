@@ -185,6 +185,11 @@ export AGENT_VERDICT_SYSTEM="$system" AGENT_VERDICT_PRIOR_SESSION="$resume"
 if grep -q "You judge one line of text" "$system" 2>/dev/null; then
   text=$(cat judge-answer 2>/dev/null || echo "VERDICT: accepted")
 else
+  echo "[$model]" >> asked-model
+  if [ -f refuse-model ]; then
+    M="$model" python3 -c 'import json, os; print(json.dumps({{"is_error": True, "result": "There is an issue with the selected model (" + os.environ["M"] + "). It may not exist or you may not have access to it."}}))'
+    exit 0
+  fi
   text=$({body})
 fi
 export SID=$(cat session 2>/dev/null || echo s-1) TEXT="$text"

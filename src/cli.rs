@@ -1,7 +1,8 @@
 // Concern: the invocation grammar — every mode this binary answers and the flags each one accepts | Non-concern: what a mode decides, or anything it prints | IO: (argv) -> Mode
 
 pub const USAGE: &str = concat!(
-    "usage: git-agent-verdict <msg-file> <gate> [--simple] [--override-prompt <path>]\n",
+    "usage: git-agent-verdict <msg-file> <gate> [--simple] [--model <name>]\n",
+    "                         [--override-prompt <path>]\n",
     "                         (--doc <path> | --rule <text>)... --path <pathspec>...\n",
     "       git-agent-verdict attest --repo <abs path> [--intent <one line>]\n",
     "       git-agent-verdict reset --repo <abs path> <reason>\n",
@@ -29,6 +30,7 @@ pub struct Brief {
 }
 
 pub struct Invocation {
+    pub model: Option<String>,
     pub msg_file: String,
     pub gate: String,
     pub docs: Vec<String>,
@@ -102,6 +104,7 @@ struct Parsed {
     docs: Vec<String>,
     rules: Vec<String>,
     paths: Vec<String>,
+    model: Option<String>,
 }
 
 // Every list is a repeated singular flag: no variadic can absorb the token meant for its neighbour.
@@ -119,6 +122,9 @@ fn collect(args: impl Iterator<Item = String>) -> Result<Parsed, String> {
             }
             "--intent" => p.intent = Some(args.next().ok_or("--intent needs a line of text")?),
             "--repo" => p.repo = Some(args.next().ok_or("--repo needs an absolute path")?),
+            "--model" => {
+                p.model = Some(args.next().ok_or("--model needs a model the agent knows")?)
+            }
             BACKGROUND => p.background = true,
             "--simple" => p.brief.simple = true,
             "--override-prompt" => {
@@ -145,6 +151,7 @@ fn only(detail: &str, p: &Parsed, takes: &[&str]) -> Result<(), String> {
         ("--require-version", p.require_version.is_some()),
         ("--intent", p.intent.is_some()),
         ("--repo", p.repo.is_some()),
+        ("--model", p.model.is_some()),
         (BACKGROUND, p.background),
         ("--simple", p.brief.simple),
         ("--override-prompt", p.brief.prompt.is_some()),
@@ -286,6 +293,7 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Mode, String> {
         ));
     }
     Ok(Mode::Gate(Box::new(Invocation {
+        model: p.model.clone(),
         msg_file,
         gate: gate_name(&gate)?,
         docs,

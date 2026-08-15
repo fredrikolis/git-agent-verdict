@@ -4,6 +4,22 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [1.6.0] - 2026-08-15
+
+### Added
+- `--model <name>` on a gate: which model reviews it, passed to the agent exactly as written. An
+  annotation check and a correctness review are not worth the same model, and which is which is the
+  repo's call. Omitted, the agent picks.
+- Nothing here validates the name against a list — that list would go stale, and the agent already
+  answers for one it does not know. A model it will not answer for fails the run at exit 2, quotes
+  what the agent said, and names the gate that declared it: the fault is the hook's wiring, not the
+  commit's, and no amount of retrying by whoever is committing will resolve it.
+
+### Fixed
+- The agent's stderr is captured and carried out on a failing run, rather than left on the terminal
+  while the error said only which status it exited with. A refusal it makes before answering — an
+  unknown model being the one that matters — is said nowhere else.
+
 ## [1.5.0] - 2026-08-14
 
 ### Added

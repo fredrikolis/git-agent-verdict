@@ -31,9 +31,9 @@ wiring is the maintainer's to fix, and the agent hitting it has no other way to 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
-git agent-verdict --require-version 1.5
-git agent-verdict "$1" standards   --doc docs/repo-standards.md --path .
-git agent-verdict "$1" annotations --simple --doc docs/annotation-guide.md --path .
+git agent-verdict --require-version 1.6
+git agent-verdict "$1" standards   --model opus --doc docs/repo-standards.md --path .
+git agent-verdict "$1" annotations --simple --model haiku --doc docs/annotation-guide.md --path .
 git agent-verdict "$1" prose       --simple --doc docs/communication-style.md \
                                    --rule "each entry is one half-sentence" --path "*.md"
 ```
@@ -41,6 +41,12 @@ git agent-verdict "$1" prose       --simple --doc docs/communication-style.md \
 Gate names are repo-chosen labels, not keywords. Line order is review order, and `attest` takes them
 one at a time in that order: a later gate must never be judged against content an earlier one is
 still changing.
+
+`--model` names the model that reviews a gate, passed to the agent exactly as written and never
+checked against a list here — that list would go stale, and the agent already answers for a name it
+does not know. An annotation check and a correctness review are not worth the same model, and which
+is which is the repo's call. Omitted, the agent picks. A model the agent will not answer for fails
+the run and names the gate that declared it: that is the hook's wiring, not the commit's.
 
 `--rule` states a measure inline where a whole document would be more than the check is worth. A
 gate needs at least one `--doc` or `--rule`, and carries both where it wants both.
@@ -64,7 +70,7 @@ Each line is the whole declaration of its gate, which is what lets the tool brie
 as that gate will judge — it re-runs this hook to read the declarations rather than keeping a second
 copy in a config file.
 
-A pin, not a floor. `1.5` names a compatibility line: every additive `1.x` satisfies it, and `2.0.0`
+A pin, not a floor. `1.6` names a compatibility line: every additive `1.x` satisfies it, and `2.0.0`
 will not, because a major release may take a flag away or change what a trailer must carry. A hook
 written against the old grammar cannot tell on its own, and finds out when a commit dies on an
 unknown flag. Both directions are refused: too old cannot answer what the hook asks, and a later

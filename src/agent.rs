@@ -38,8 +38,9 @@ impl Agent {
         system: &str,
         prompt: &str,
         resume: Option<&str>,
+        model: Option<&str>,
     ) -> Result<Answer, String> {
-        claude(role, system, prompt, resume)
+        claude(role, system, prompt, resume, model)
     }
 }
 
@@ -50,15 +51,21 @@ fn system_file(text: &str) -> Result<std::path::PathBuf, String> {
     Ok(path)
 }
 
-// Judging one line of text is not worth the model a review is worth, and which model is small enough to do it is claude's own business.
-fn claude_model(role: Role) -> Option<&'static str> {
+// A review's model is the repo's call and passes through untouched — never checked against a list this build would have to keep current. Judging one line of text is not worth the model a review is worth, and which model is small enough for it is claude's own business.
+fn claude_model(role: Role, asked: Option<&str>) -> Option<&str> {
     match role {
-        Role::Review => None,
+        Role::Review => asked,
         Role::JudgeIntent => Some("haiku"),
     }
 }
 
-fn claude(role: Role, system: &str, prompt: &str, resume: Option<&str>) -> Result<Answer, String> {
+fn claude(
+    role: Role,
+    system: &str,
+    prompt: &str,
+    resume: Option<&str>,
+    model: Option<&str>,
+) -> Result<Answer, String> {
     let file = system_file(system)?;
     let mut command = Command::new("claude");
     command.args(["-p", "--output-format", "json"]);
@@ -66,7 +73,7 @@ fn claude(role: Role, system: &str, prompt: &str, resume: Option<&str>) -> Resul
     if let Some(session) = resume {
         command.args(["--resume", session]);
     }
-    if let Some(model) = claude_model(role) {
+    if let Some(model) = claude_model(role, model) {
         command.args(["--model", model]);
     }
     let out = piped(command, prompt)?;
@@ -79,6 +86,7 @@ fn piped(mut command: Command, prompt: &str) -> Result<String, String> {
     let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("cannot run the reviewer: {e}"))?;
     let mut stdin = child.stdin.take().ok_or("the reviewer took no stdin")?;
@@ -95,9 +103,13 @@ fn piped(mut command: Command, prompt: &str) -> Result<String, String> {
         }
         Ok(_) => {}
     }
-    // Its own stderr is inherited, so whatever it said is already above this line.
+    // Carried out rather than left on the terminal: a refusal it makes before answering — an unknown model is the one that matters — is said only here, and a caller that reports an exit status alone has thrown away the whole diagnosis.
     if !out.status.success() {
-        return Err(format!("the reviewer exited {}", out.status));
+        let said = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        if said.is_empty() {
+            return Err(format!("the reviewer exited {}", out.status));
+        }
+        return Err(said);
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }

@@ -23,7 +23,9 @@ const GUIDE: &str = r#"WIRING A REPO — git-agent-verdict
 
      # Graded, and blocks on major=. A gate may be judged against several rubrics, and --rule
      # states one inline where a whole document would be more than the check is worth.
-     git agent-verdict "$1" my-standards-gate \
+     # --model is passed to the agent as given and never checked here: what a gate is worth
+     # reviewing at is the repo's call. Omitted, the agent picks.
+     git agent-verdict "$1" my-standards-gate --model opus \
        --doc docs/standards.md --doc docs/annotations.md \
        --rule "every public item carries a one-line comment" \
        --path .
@@ -31,7 +33,7 @@ const GUIDE: &str = r#"WIRING A REPO — git-agent-verdict
      # Advisory: same ladder, no MAJOR rung, never blocks. The shell expands $KB, so a rubric may live
      # outside the repo, where nothing can stage it. A gate needs at least one --doc or --rule.
      # `*.md` is a git pathspec, so it matches at any depth: this gate reads docs/ too.
-     git agent-verdict "$1" prose-gate --simple \
+     git agent-verdict "$1" prose-gate --simple --model haiku \
        --doc "$KB/writing-style.md" --path "*.md"
 
      # Line order is review order: a later gate is never judged against what an earlier one is

@@ -79,14 +79,29 @@ fn review(
         Some(_) => crate::brief::continuing(),
         None => crate::brief::opening(intent),
     };
-    let answer = agent.run(
-        crate::agent::Role::Review,
-        &system,
-        &prompt,
-        prior.as_deref(),
-    )?;
+    let answer = agent
+        .run(
+            crate::agent::Role::Review,
+            &system,
+            &prompt,
+            prior.as_deref(),
+            declaration.model.as_deref(),
+        )
+        .map_err(|said| declared_model_fault(declaration, &said))?;
     let verdicts = crate::runner::verdicts(&answer, declaration.brief.simple)?;
     Ok((verdicts, crate::runner::findings(&answer.text)))
+}
+
+// A model the agent will not answer for is the hook's wiring, not this commit's, and no dev agent is going to resolve it by trying again or by choosing another. Naming the declaration is what turns a reviewer error into the maintenance it is.
+fn declared_model_fault(declaration: &Declaration, said: &str) -> String {
+    let Some(model) = &declaration.model else {
+        return said.to_string();
+    };
+    let hook = git::hook_path().unwrap_or_else(|_| "the commit-msg hook".to_string());
+    format!(
+        "gate '{}' declares --model {model}, and the agent answered:\n  {said}\nThe declaration is in {hook}. Changing it is maintenance, committed with --no-verify.",
+        declaration.gate
+    )
 }
 
 fn trailers(hook: &Hook, steps: &[state::Step]) -> Result<Vec<String>, String> {
@@ -179,6 +194,7 @@ pub fn run(asked: Option<&str>) -> Result<bool, String> {
                 crate::agent::Role::JudgeIntent,
                 &crate::brief::judge_system(),
                 &crate::brief::judge_prompt(asked),
+                None,
                 None,
             )?;
             crate::runner::judge(&answer, asked)?;

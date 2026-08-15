@@ -250,6 +250,39 @@ fn an_unstaged_edit_no_gate_reviews_is_left_alone() {
     assert!(message.contains("Reviewed-standards:"), "{message}");
 }
 
+// How hard a gate is worth reviewing is the repo's call: an annotation check and a correctness review are not worth the same model, and the tool has no business choosing for either.
+#[test]
+fn a_gate_declaring_a_model_hands_it_to_the_agent() {
+    let repo = Repo::new();
+    let heavy = r#""$1" standards --model opus --doc rubric.md --path .;"#;
+    let light = r#""$1" prose --simple --model haiku --doc rubric.md --path .;"#;
+    repo.declare(CLEAN, &[heavy, light]);
+    repo.stage(&["src.rs"]);
+    repo.attest(AIM);
+    repo.again();
+    assert_eq!(repo.read("asked-model"), "[opus]\n[haiku]\n");
+}
+
+// Nothing here keeps a list of which models exist; that list would go stale, and the agent already answers for an unknown one in its own words.
+#[test]
+fn an_unknown_model_is_the_hooks_fault_and_says_so() {
+    let repo = Repo::new();
+    let gate = r#""$1" standards --model no-such-model --doc rubric.md --path .;"#;
+    repo.declare(CLEAN, &[gate]);
+    repo.write("refuse-model", "");
+    repo.stage(&["src.rs"]);
+    let run = repo.attest(AIM);
+    assert_eq!(run.code, 2, "{}", run.err);
+    assert!(
+        run.err.contains("declares --model no-such-model"),
+        "{}",
+        run.err
+    );
+    assert!(run.err.contains("may not have access to it"), "{}", run.err);
+    assert!(run.err.contains("--no-verify"), "{}", run.err);
+    assert!(!repo.committed(), "{}", run.err);
+}
+
 // The pin is the one line enumeration honours. Read past it, attest would review against a declaration nobody has established this release can parse — and pay for it before git ever runs the hook that refuses.
 #[test]
 fn a_hook_pinned_to_another_line_refuses_before_a_review_is_paid_for() {
