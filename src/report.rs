@@ -138,6 +138,31 @@ pub fn judging() {
     eprintln!("git-agent-verdict: judging the intent…");
 }
 
+// A claim with nothing running under it is the one record that the last run did not end on its own terms, and how long it had been going when it stopped. Clearing it in silence throws away the only evidence of a kill this tool ever holds.
+pub fn abandoned(pid: &str, held: u64) {
+    eprintln!(
+        "git-agent-verdict: the previous attest (pid {pid}) did not finish — it was {held}s in when it stopped. Taking its claim."
+    );
+}
+
+// Said before the reviewer is spawned rather than after it answers, because a run that is killed never reaches the after. Without this line the shell holding a dead run has nothing saying which gate was in play or which session to go and read; with it, the two facts survive the kill.
+pub fn reviewing(gate: &str, session: &str) {
+    eprintln!(
+        "git-agent-verdict: {gate}: reviewing — session {session}, pid {}",
+        std::process::id()
+    );
+}
+
+// The elapsed time, which is the number that tells a kill apart from a hang: thirteen seconds and ten minutes read exactly alike in a shell that reports only that something died.
+pub fn still_reviewing(elapsed: u64, ceiling: u64) {
+    eprintln!("git-agent-verdict: still reviewing — {elapsed}s of {ceiling}s");
+}
+
+// Said out loud because it is evidence the author does not otherwise have: a marker left behind means the last run died mid-review, which nothing else in this tool would ever mention. The reviewer picked up here is the one that was already reading, not a second one paid for from the top.
+pub fn resuming(gate: &str, session: &str) {
+    eprintln!("git-agent-verdict: {gate}: the last run was cut short mid-review — resuming its reviewer, session {session}");
+}
+
 // Where each gate stands once a run is over, and why it is not in play when it is not. Nothing is under review by then, so there is no running state to show.
 pub enum Standing {
     Passed(String),

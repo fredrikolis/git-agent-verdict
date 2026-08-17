@@ -5,6 +5,7 @@ pub const USAGE: &str = concat!(
     "                         [--override-prompt <path>]\n",
     "                         (--doc <path> | --rule <text>)... --path <pathspec>...\n",
     "       git-agent-verdict attest --repo <abs path> [--intent <one line>]\n",
+    "                                [--timeout <minutes, default 30; or 90s, 45m, 2h>]\n",
     "       git-agent-verdict reset --repo <abs path> <reason>\n",
     "       git-agent-verdict --reviewer-prompt <gate>\n",
     "       git-agent-verdict --require-version <major.minor>\n",
@@ -21,6 +22,34 @@ pub fn agent_verb(args: &[String]) -> bool {
 
 // Wide enough for one real change's aim, and narrow enough that two aims will not fit: the reviewer refuses a brief that argues, so this bounds the change rather than the prose.
 const INTENT_LIMIT: usize = 300;
+
+// Above the longest review anyone has watched finish, and far enough above it that hitting this is evidence of a reviewer that has stopped rather than one that is thinking. A ceiling the tool owns: without one the only thing that ends a hung agent is whatever shell it was started in, which kills it with no elapsed time, no signal and nothing said.
+const REVIEW_CEILING: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+// Minutes, because that is the unit a review is discussed in. The suffixes are for a test that cannot spend a minute proving a hang is caught.
+fn ceiling(text: &str) -> Result<std::time::Duration, String> {
+    let malformed = || {
+        format!(
+            "--timeout {text}: a whole number of minutes, or a number with a unit — 90s, 45m, 2h"
+        )
+    };
+    let (digits, per) = match text.strip_suffix(['s', 'm', 'h']) {
+        Some(digits) => (digits, text.chars().last().ok_or_else(malformed)?),
+        None => (text, 'm'),
+    };
+    let count: u64 = digits.parse().map_err(|_| malformed())?;
+    let seconds = match per {
+        's' => 1,
+        'm' => 60,
+        _ => 60 * 60,
+    };
+    // A ceiling of nothing is every reviewer killed before it can answer, which reads as the agent failing rather than as the flag.
+    let total = count
+        .checked_mul(seconds)
+        .filter(|total| *total > 0)
+        .ok_or_else(|| format!("--timeout {text}: a ceiling above zero, and short of forever"))?;
+    Ok(std::time::Duration::from_secs(total))
+}
 
 // How a gate briefs its reviewer: which template it reads. Held apart because --reviewer-prompt has one without a message, a pathspec or a decision.
 #[derive(Default)]
@@ -41,8 +70,8 @@ pub struct Invocation {
 
 pub enum Mode {
     Gate(Box<Invocation>),
-    // The repo comes first because nothing else means anything without it: the verb acts on the tree named here and never on the one the shell is standing in.
-    Attest(String, Option<String>),
+    // The repo comes first because nothing else means anything without it: the verb acts on the tree named here and never on the one the shell is standing in. The ceiling comes last because it is the one field with an answer when the author gives none.
+    Attest(String, Option<String>, std::time::Duration),
     Reset(String, String),
     ReviewerPrompt(String),
     RequireVersion(String),
@@ -99,6 +128,7 @@ struct Parsed {
     setup_guide: bool,
     intent: Option<String>,
     repo: Option<String>,
+    timeout: Option<String>,
     background: bool,
     brief: Brief,
     docs: Vec<String>,
@@ -122,6 +152,9 @@ fn collect(args: impl Iterator<Item = String>) -> Result<Parsed, String> {
             }
             "--intent" => p.intent = Some(args.next().ok_or("--intent needs a line of text")?),
             "--repo" => p.repo = Some(args.next().ok_or("--repo needs an absolute path")?),
+            "--timeout" => {
+                p.timeout = Some(args.next().ok_or("--timeout needs a number of minutes")?)
+            }
             "--model" => {
                 p.model = Some(args.next().ok_or("--model needs a model the agent knows")?)
             }
@@ -151,6 +184,7 @@ fn only(detail: &str, p: &Parsed, takes: &[&str]) -> Result<(), String> {
         ("--require-version", p.require_version.is_some()),
         ("--intent", p.intent.is_some()),
         ("--repo", p.repo.is_some()),
+        ("--timeout", p.timeout.is_some()),
         ("--model", p.model.is_some()),
         (BACKGROUND, p.background),
         ("--simple", p.brief.simple),
@@ -188,26 +222,35 @@ fn target(p: &Parsed) -> Result<String, String> {
 
 // Optional once a review has recorded one: the diary holds the aim, it may not change without a MAJOR, and retyping it can only fail.
 const FOREGROUND: &str = "a review reads every rubric in full and the whole staged diff, and often runs \
-for ten minutes or more.\nA foreground shell will kill it partway, and you pay for the half that ran.\
+for ten minutes or more.\nA foreground shell will kill it partway.\
 \n\nStart it in a BACKGROUND shell with a long timeout, then say so:\n\n  \
 git agent-verdict attest --repo <abs path to the repo root> \\\n    \
 --intent \"<the aim, one flat line>\" \\\n    \
 --confirm-running-in-background-shell-with-long-timeout\n\nThe flag asserts; it cannot check. \
 It is here because this is worth reading once, and this is when.\n\nRun it directly — no wait loop. \
-attest holds the repo while it runs, and a second one refuses at once naming what holds it.";
+attest holds the repo while it runs, and a second one refuses at once naming what holds it.\
+\n\nLet the shell capture what it prints; do not redirect it to a file. Under a redirect a run that \
+is killed leaves an empty capture and a truncated log, and the reviewer's own error — the one worth \
+reading — is in neither.\n\nA killed run is usually not lost work: the reviewer's session is named before it starts, and \
+the next attest takes up the round where it stopped — where that reviewer had got far enough to \
+leave a transcript behind.";
 
 fn attest(p: &Parsed) -> Result<Mode, String> {
     if !p.background {
         return Err(FOREGROUND.to_string());
     }
     let repo = target(p)?;
+    let ceiling = match &p.timeout {
+        Some(text) => ceiling(text)?,
+        None => REVIEW_CEILING,
+    };
     let Some(intent) = p.intent.clone() else {
         only(
-            "attest takes --repo and --intent only: what each gate reviews comes from the commit-msg hook",
+            "attest takes --repo, --intent and --timeout only: what each gate reviews comes from the commit-msg hook",
             p,
-            &["--repo", "<positional>", BACKGROUND],
+            &["--repo", "--timeout", "<positional>", BACKGROUND],
         )?;
-        return Ok(Mode::Attest(repo, None));
+        return Ok(Mode::Attest(repo, None, ceiling));
     };
     // An aim that will not fit is usually two aims: the limit is a decomposition check as much as a brevity one.
     if intent.contains('\n') || intent.chars().count() > INTENT_LIMIT {
@@ -220,11 +263,17 @@ fn attest(p: &Parsed) -> Result<Mode, String> {
         return Err("--intent is empty".to_string());
     }
     only(
-        "attest takes --repo and --intent only: what each gate reviews comes from the commit-msg hook",
+        "attest takes --repo, --intent and --timeout only: what each gate reviews comes from the commit-msg hook",
         p,
-        &["--intent", "--repo", "<positional>", BACKGROUND],
+        &[
+            "--intent",
+            "--repo",
+            "--timeout",
+            "<positional>",
+            BACKGROUND,
+        ],
     )?;
-    Ok(Mode::Attest(repo, Some(intent)))
+    Ok(Mode::Attest(repo, Some(intent), ceiling))
 }
 
 // The reason is the whole point of the verb, so it is required rather than defaulted: an unexplained reset is the one this exists to make visible.

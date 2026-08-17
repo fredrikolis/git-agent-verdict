@@ -47,6 +47,7 @@ impl Repo {
         git(&dir, &["config", "user.email", "t@t"]);
         git(&dir, &["config", "user.name", "t"]);
         let repo = Repo { dir };
+        std::fs::create_dir_all(repo.home()).expect("home dir");
         repo.write("rubric.md", "the standard");
         repo.write("src.rs", "code");
         repo
@@ -54,6 +55,37 @@ impl Repo {
 
     pub fn write(&self, name: &str, body: &str) {
         std::fs::write(self.dir.join(name), body).expect("write");
+    }
+
+    pub fn home(&self) -> PathBuf {
+        self.dir.with_extension("home")
+    }
+
+    // The transcript a real agent would have written as it worked. The tool resumes a cut-short round only where one exists, so a test of that has to leave one — keyed on the directory the reviewer ran in, with everything that is not a letter or a digit written as a hyphen. That key mirrors `slug` in src/agent.rs, which cannot be called from here: this crate ships a binary and no library, so the rule is written twice and an edit to either wants the other.
+    pub fn transcript_for(&self, session: &str) {
+        let slug: String = self
+            .dir
+            .to_string_lossy()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
+        let dir = self.home().join(".claude").join("projects").join(slug);
+        std::fs::create_dir_all(&dir).expect("projects dir");
+        std::fs::write(dir.join(format!("{session}.jsonl")), "{}\n").expect("transcript");
+    }
+
+    // What the reviewer was handed on stdin, round by round: which of the three openings it was given is the whole of what a resumed round gets right or wrong.
+    pub fn prompts(&self) -> String {
+        self.read("prompts")
+    }
+
+    // The last session the tool opened rather than resumed, which is the one a cut-short round left behind.
+    pub fn last_assigned(&self) -> String {
+        self.read("assigned-sessions")
+            .lines()
+            .rfind(|l| !l.trim().is_empty())
+            .expect("an assigned session")
+            .to_string()
     }
 
     // A rubric the repo can never stage, which is how the setup guide tells a repo to keep one: `$KB/standards.md`, expanded by the hook's own shell.
@@ -88,6 +120,8 @@ impl Repo {
             .current_dir(cwd)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            // A home of its own, outside the repo so nothing it holds can reach a pathspec: the tool looks under one for the reviewer's transcript and writes its long reports there, and a test that used the real one would read another session's evidence and leave its own behind.
+            .env("HOME", self.home())
             // The stub agent goes first: the tool runs `claude` by name, so this is where a test's reviewer is substituted.
             .env(
                 "PATH",
@@ -141,6 +175,21 @@ impl Repo {
         self.capture(&["attest", "--repo", &root, BACKGROUND])
     }
 
+    // A ceiling stated in seconds: proving a hung reviewer is killed must not cost the half hour the default allows.
+    pub fn attest_within(&self, intent: &str, ceiling: &str) -> Run {
+        let root = self.root();
+        self.capture(&[
+            "attest",
+            "--repo",
+            &root,
+            "--intent",
+            intent,
+            "--timeout",
+            ceiling,
+            BACKGROUND,
+        ])
+    }
+
     // One declaration per line, run through the binary by absolute path: a name resolves from PATH, which passes on a box with the tool installed and fails in CI.
     pub fn hook(&self, lines: &[&str]) {
         let body: String = lines.iter().map(|l| format!("{BIN} {l}\n")).collect();
@@ -172,15 +221,17 @@ impl Repo {
         std::fs::create_dir_all(&bin).expect("bin dir");
         let stub = format!(
             r#"#!/bin/sh
-system=""; resume=""
+system=""; resume=""; assigned=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --append-system-prompt-file) system="$2"; shift 2 ;;
     --resume) resume="$2"; shift 2 ;;
+    --session-id) assigned="$2"; shift 2 ;;
     --model) model="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
+echo "$assigned" >> assigned-sessions
 export AGENT_VERDICT_SYSTEM="$system" AGENT_VERDICT_PRIOR_SESSION="$resume"
 if grep -q "You judge one line of text" "$system" 2>/dev/null; then
   text=$(cat judge-answer 2>/dev/null || echo "VERDICT: accepted")
@@ -194,6 +245,34 @@ else
 fi
 export SID=$(cat session 2>/dev/null || echo s-1) TEXT="$text"
 python3 -c 'import json, os; print(json.dumps({{"is_error": False, "result": os.environ["TEXT"], "session_id": os.environ["SID"], "modelUsage": {{"fake-model": {{}}}}}}))'
+"#
+        );
+        let path = bin.join("claude");
+        std::fs::write(&path, stub).expect("write stub");
+        let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
+        std::fs::set_permissions(&path, mode).expect("chmod");
+        git(&self.dir, &["config", "agent-verdict.runner", "claude"]);
+    }
+
+    // The reviewer process itself, not a body wrapped in the answer it should have given: a crash is the case where there is no well-formed answer to wrap, so a test of one writes the process. The judge still answers as it always does — a reviewer that crashes is not an intent that was refused, and a run that stopped at the judge would prove neither.
+    pub fn declare_agent(&self, reviewer: &str, gates: &[&str]) {
+        self.hook(gates);
+        let bin = self.dir.join("bin");
+        std::fs::create_dir_all(&bin).expect("bin dir");
+        let stub = format!(
+            r#"#!/bin/sh
+system=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --append-system-prompt-file) system="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if grep -q "You judge one line of text" "$system" 2>/dev/null; then
+  python3 -c 'import json; print(json.dumps({{"is_error": False, "result": "VERDICT: accepted", "session_id": "s-judge", "modelUsage": {{"fake-model": {{}}}}}}))'
+  exit 0
+fi
+{reviewer}
 "#
         );
         let path = bin.join("claude");
@@ -289,5 +368,8 @@ impl Drop for Repo {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.dir);
         let _ = std::fs::remove_file(self.dir.with_extension("outside.md"));
+        // Everything this repo was given, not only the tree: the home holds transcripts and review logs the tool wrote under it, and a suite that leaves one behind per test fills /tmp with them.
+        let _ = std::fs::remove_dir_all(self.home());
+        let _ = std::fs::remove_dir_all(self.dir.with_extension("outside"));
     }
 }

@@ -1,4 +1,4 @@
-// Concern: the review diary for the commit being written — its place, its tokens, its resets | Non-concern: running a review, or judging one | IO: (gate, verdicts) -> token
+// Concern: the review diary for the commit being written — its place, its tokens, its resets, and the round it has open | Non-concern: running a review, or judging one | IO: (gate, verdicts) -> token
 
 use crate::git;
 use crate::trailer::{Counts, Verdict};
@@ -8,6 +8,7 @@ const DIR: &str = "agent-verdict";
 const PROGRESS: &str = "progress";
 const INTENT: &str = "intent";
 const RESETS: &str = "resets.log";
+const PENDING: &str = "pending";
 
 // A diary, not a vault: `--no-verify` exists, so nothing here resists an author who means it. What it buys is that a count cannot be edited by accident or read by grep.
 fn digest(bytes: &[u8], seed: u64) -> u64 {
@@ -140,8 +141,40 @@ pub fn progress() -> Result<Vec<Step>, String> {
     Ok(steps)
 }
 
+// A round that opened and has not closed. Written before the reviewer is spawned and cleared when its verdict is recorded, so anything found here afterwards is a round that died in flight — and the session it names is still on disk holding everything that reviewer had read.
+pub struct Pending {
+    pub gate: String,
+    pub session: String,
+    pub tries: u32,
+}
+
+pub fn open_round(gate: &str, session: &str, tries: u32) -> Result<(), String> {
+    let path = here()?.join(PENDING);
+    std::fs::write(&path, format!("{gate}\t{session}\t{tries}"))
+        .map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
+pub fn in_flight() -> Result<Option<Pending>, String> {
+    let Ok(text) = std::fs::read_to_string(here()?.join(PENDING)) else {
+        return Ok(None);
+    };
+    let mut fields = text.trim().split('\t');
+    let (Some(gate), Some(session), Some(tries)) = (fields.next(), fields.next(), fields.next())
+    else {
+        return Ok(None);
+    };
+    Ok(Some(Pending {
+        gate: gate.to_string(),
+        session: session.to_string(),
+        // Unreadable is treated as the first try: a count that cannot be parsed should not be the thing that stops a review from running.
+        tries: tries.parse().unwrap_or(0),
+    }))
+}
+
 pub fn record(gate: &str, verdicts: &[Verdict], blocked: bool) -> Result<String, String> {
     let dir = here()?;
+    // The round closed, so what marked it open goes: a marker outliving its verdict is a resume of a reviewer that already answered.
+    let _ = std::fs::remove_file(dir.join(PENDING));
     let body = serialize(verdicts);
     let token = issue(gate, &body);
     let entry = dir.join(fingerprint(&token));

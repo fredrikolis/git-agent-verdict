@@ -4,6 +4,31 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [1.8.0] - 2026-08-16
+
+### Added
+- `attest` bounds a review with a ceiling of its own: 30 minutes by default, `--timeout <minutes>`
+  to raise it. A reviewer that stops answering is killed and reported with the elapsed time, rather
+  than left for whatever shell is holding the run to kill with no signal, no duration and nothing
+  said. The judge keeps its own five-minute ceiling.
+- The reviewer's session is chosen and written down before it is spawned, so a run that crashes,
+  hangs or is killed still names the session it was in. Every reviewer failure ends with the path
+  to that session's transcript, where what the reviewer actually did is recorded.
+- A round cut short is taken up where it stopped instead of paid for again. The next `attest`
+  resumes the interrupted reviewer, briefed as interrupted rather than as a re-review, bounded to
+  three attempts and only where the reviewer had got far enough to leave a transcript.
+- A review says which gate and session it is on before it starts, and its elapsed time as it runs.
+- Taking over the claim of a run that died says so, naming the pid and how long it had been going.
+
+### Fixed
+- A reviewer's crash on stderr was discarded whenever it exited 0, leaving `the reviewer's answer
+  is not JSON` in place of what the agent said. stderr is now kept whatever the exit status and
+  carried out with the failure.
+- An answer carrying no verdict line now names why the reviewer stopped, which tells a run to
+  repeat apart from a brief to fix.
+- A reviewer that exits while something it spawned still holds its pipe no longer hangs the run:
+  the pipe is drained on a grace, not waited on to a close that may never come.
+
 ## [1.7.1] - 2026-08-15
 
 ### Fixed

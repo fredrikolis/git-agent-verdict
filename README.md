@@ -123,6 +123,11 @@ agent-verdict gates mandated by repo:
 next: address the findings, then attest again for annotations
 ```
 
+A review that stops answering is killed and reported, rather than left for whatever shell is holding
+the run to kill without a word: the ceiling is 30 minutes, and `--timeout <minutes>` raises it where
+a review here is genuinely longer. A reviewer that crashes, answers with no verdict, or is cut off
+mid-answer exits 2 carrying what it said — a failed review never reads as a clean one.
+
 Run `attest` directly. It holds the repo for as long as it runs, and a second one refuses at once,
 naming the pid that holds it and how long it has been held — so there is nothing to guard against
 and no reason to wrap it in a wait loop. A hand-built guard is where this goes wrong: a `pgrep -f`

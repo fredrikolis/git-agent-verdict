@@ -120,8 +120,13 @@ pub fn verdicts(answer: &Answer, simple: bool) -> Result<Vec<Verdict>, String> {
         });
     }
     if verdicts.is_empty() {
+        // Why it stopped, beside the fact that it did: an agent cut off at its turn limit and one that answered at length while ignoring its brief are the same silence here, and they are not the same fault. One is re-run, the other is a brief to fix.
+        let stopped = match answer.stop_reason.as_str() {
+            "" | "end_turn" => String::new(),
+            reason => format!(" — it stopped on {reason}"),
+        };
         return Err(format!(
-            "the reviewer closed with no `{MARKER}` line, so it reported nothing this tool can record"
+            "the reviewer closed with no `{MARKER}` line{stopped}, so it reported nothing this tool can record"
         ));
     }
     // One review, one verdict: the rest is recorded under a single token and rendered as a trailer apiece, which the gate reads as trailers contradicting the review they name.

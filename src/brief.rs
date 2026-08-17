@@ -133,3 +133,10 @@ pub fn opening(intent: &str) -> String {
 pub fn continuing() -> String {
     "Fixes incorporated, re-review requested.\n".to_string()
 }
+
+// Not a re-review: nothing was fixed and nothing was asked again. The round this reviewer was in the middle of was cut short — killed, timed out, or crashed — and it is being taken up where it stopped. Told it was a re-review instead, it would report on changes nobody made.
+pub fn resuming() -> String {
+    "Your review was interrupted before you reported it. Nothing has changed since.\n\
+     Continue from where you stopped, redoing only what you had not finished, and close with your verdict line.\n"
+        .to_string()
+}

@@ -91,7 +91,10 @@ pub fn take() -> Result<Held, String> {
                 if let Some(said) = refusal(&text, &path) {
                     return Err(said);
                 }
-                // Nothing is running under it: a run that was killed leaves this behind, and a repo no command can enter again is worse than the race the claim prevents.
+                // Nothing is running under it: a run that was killed leaves this behind, and a repo no command can enter again is worse than the race the claim prevents. Said rather than cleared in silence — the claim is this tool's own evidence that the last run died, and how long it had been going when it did, which nothing else here would ever mention.
+                if let Some((pid, since, _)) = holder(&text) {
+                    crate::report::abandoned(&pid, now().saturating_sub(since));
+                }
                 let _ = std::fs::remove_file(&path);
             }
             Err(e) => return Err(format!("cannot claim {}: {e}", path.display())),

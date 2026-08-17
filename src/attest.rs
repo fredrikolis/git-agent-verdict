@@ -67,25 +67,71 @@ fn prior_session(declaration: &Declaration, steps: &[state::Step]) -> Option<Str
     session_of(latest(&declaration.gate, steps)?)
 }
 
+// Three things can be asked of a reviewer, and they are not interchangeable: a gate nobody has reviewed, one whose findings the author has since acted on, and one whose round was cut short with nothing changed. Told the wrong one, a resumed reviewer reports on fixes nobody made.
+enum Opening {
+    First,
+    Again,
+    Interrupted,
+}
+
+struct Round {
+    opening: Opening,
+    session: crate::agent::Session,
+    tries: u32,
+}
+
+// A round that opened and never closed is taken up rather than paid for again — but only while its transcript is really there, and only so many times: a session that cannot be resumed would otherwise be retried by every run from here on, and a gate nothing can enter is worse than a review paid for twice.
+const TRIES: u32 = 3;
+
+fn round_for(declaration: &Declaration, steps: &[state::Step]) -> Result<Round, String> {
+    if let Some(held) = state::in_flight()? {
+        if held.gate == declaration.gate
+            && held.tries < TRIES
+            && crate::agent::transcript(&held.session).is_some()
+        {
+            return Ok(Round {
+                opening: Opening::Interrupted,
+                session: crate::agent::Session::resumed(&held.session),
+                tries: held.tries + 1,
+            });
+        }
+    }
+    Ok(match prior_session(declaration, steps) {
+        Some(session) => Round {
+            opening: Opening::Again,
+            session: crate::agent::Session::resumed(&session),
+            tries: 1,
+        },
+        None => Round {
+            opening: Opening::First,
+            session: crate::agent::Session::opened(),
+            tries: 1,
+        },
+    })
+}
+
 // A resumed reviewer holds the aim, the criteria and the ladder; one starting fresh is told them again. The tool chose which, so there is nothing here to detect.
 fn review(
     declaration: &Declaration,
     agent: &crate::agent::Agent,
     intent: &str,
-    prior: Option<String>,
+    round: &Round,
+    ceiling: std::time::Duration,
 ) -> Result<(Vec<Verdict>, String), String> {
     let system = crate::brief::system(declaration)?;
-    let prompt = match prior {
-        Some(_) => crate::brief::continuing(),
-        None => crate::brief::opening(intent),
+    let prompt = match round.opening {
+        Opening::First => crate::brief::opening(intent),
+        Opening::Again => crate::brief::continuing(),
+        Opening::Interrupted => crate::brief::resuming(),
     };
     let answer = agent
         .run(
             crate::agent::Role::Review,
             &system,
             &prompt,
-            prior.as_deref(),
+            &round.session,
             declaration.model.as_deref(),
+            ceiling,
         )
         .map_err(|said| declared_model_fault(declaration, &said))?;
     let verdicts = crate::runner::verdicts(&answer, declaration.brief.simple)?;
@@ -161,7 +207,7 @@ fn land(hook: &Hook, steps: &[state::Step], intent: &str) -> Result<bool, String
     Ok(true)
 }
 
-pub fn run(asked: Option<&str>) -> Result<bool, String> {
+pub fn run(asked: Option<&str>, ceiling: std::time::Duration) -> Result<bool, String> {
     let hook = declarations::read()?;
     // Every gate asked at once, before the first review rather than before each: a run that pays for one gate and then refuses at the next has spent the money either way.
     let mut drifting: Vec<String> = Vec::new();
@@ -194,8 +240,10 @@ pub fn run(asked: Option<&str>) -> Result<bool, String> {
                 crate::agent::Role::JudgeIntent,
                 &crate::brief::judge_system(),
                 &crate::brief::judge_prompt(asked),
+                // Its own session, opened and finished within this one question: there is nothing here worth resuming, and nothing a later round would want from it.
+                &crate::agent::Session::opened(),
                 None,
-                None,
+                ceiling,
             )?;
             crate::runner::judge(&answer, asked)?;
             state::set_intent(asked)?;
@@ -215,8 +263,14 @@ pub fn run(asked: Option<&str>) -> Result<bool, String> {
         return land(&hook, &steps, intent);
     };
     let agent = crate::runner::configured()?;
-    let prior = prior_session(declaration, &steps);
-    let (verdicts, findings) = review(declaration, &agent, intent, prior)?;
+    let round = round_for(declaration, &steps)?;
+    if matches!(round.opening, Opening::Interrupted) {
+        report::resuming(&declaration.gate, round.session.id());
+    }
+    // Written down before the reviewer is spawned, which is the whole point of choosing the session here: after this line, a run that dies leaves something that names what it was doing and what to take up.
+    state::open_round(&declaration.gate, round.session.id(), round.tries)?;
+    report::reviewing(&declaration.gate, round.session.id());
+    let (verdicts, findings) = review(declaration, &agent, intent, &round, ceiling)?;
     let blocked = verdicts.iter().any(Verdict::blocks);
     state::record(&declaration.gate, &verdicts, blocked)?;
     let after = state::progress()?;

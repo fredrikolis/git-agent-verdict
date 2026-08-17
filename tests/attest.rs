@@ -319,6 +319,9 @@ fn a_claim_left_by_a_dead_run_is_taken_over() {
     );
     let run = repo.attest(AIM);
     assert!(run.out.contains("standards:"), "{}", run.err);
+    // Cleared with a word, not in silence: the claim is the only record this tool holds that a run ended some other way than by finishing.
+    assert!(run.err.contains("did not finish"), "{}", run.err);
+    assert!(run.err.contains("pid 999999999"), "{}", run.err);
 }
 
 // Nothing is holding it once the run is over, or the next attest meets its own leftovers.
@@ -486,4 +489,224 @@ fn a_host_with_no_reviewer_configured_says_so() {
     let run = repo.attest(AIM);
     assert_eq!(run.code, 2, "{}", run.err);
     assert!(run.err.contains("agent-verdict.runner"), "{}", run.err);
+}
+
+// The tool's own ceiling, because without one the only thing that ends a hung reviewer is whatever shell is holding the run — which kills it with no elapsed time, no signal and nothing said.
+#[test]
+fn a_reviewer_that_stops_answering_is_killed_at_the_ceiling() {
+    let repo = Repo::new();
+    repo.declare_agent("echo 'still thinking' >&2; sleep 60", &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    let run = repo.attest_within(AIM, "2s");
+    assert_eq!(run.code, 2, "{}", run.err);
+    assert!(run.err.contains("without answering"), "{}", run.err);
+    assert!(run.err.contains("2s ceiling"), "{}", run.err);
+    // Said before the spawn, so it is still there after the kill: which gate was in play, and which session to go and read.
+    assert!(run.err.contains("standards: reviewing"), "{}", run.err);
+    assert!(run.err.contains("session "), "{}", run.err);
+    // The wait is accounted for as it happens — the difference between a run killed at thirteen seconds and one killed at ten minutes, which is invisible in the kill itself.
+    assert!(run.err.contains("still reviewing"), "{}", run.err);
+    assert!(run.err.contains("--timeout"), "{}", run.err);
+    // What it had said before it stopped, which is the half of the diagnosis a bare timeout throws away.
+    assert!(run.err.contains("still thinking"), "{}", run.err);
+}
+
+// An agent can crash and still exit 0, and then its stderr is the only account of the fault. A message built from the exit status alone reports what this side saw rather than what that side did.
+#[test]
+fn a_crash_on_stderr_reaches_the_author_though_the_agent_exited_clean() {
+    let repo = Repo::new();
+    repo.declare_agent(
+        "echo 'UnhandledPromiseRejection: boom' >&2; exit 0",
+        &[STANDARDS],
+    );
+    repo.stage(&["src.rs"]);
+    let run = repo.attest(AIM);
+    assert_eq!(run.code, 2, "{}", run.err);
+    assert!(run.err.contains("UnhandledPromiseRejection"), "{}", run.err);
+}
+
+// Cut off at a limit and answering at length while ignoring the brief are the same silence here, and they are not the same fault: one is re-run, the other is a brief to fix.
+#[test]
+fn an_answer_with_no_verdict_names_why_the_reviewer_stopped() {
+    let repo = Repo::new();
+    let answer = r#"python3 -c 'import json; print(json.dumps({"is_error": False, "result": "I read the diff and then", "stop_reason": "max_tokens", "session_id": "s-cut", "modelUsage": {"fake-model": {}}}))'"#;
+    repo.declare_agent(answer, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    let run = repo.attest(AIM);
+    assert_eq!(run.code, 2, "{}", run.err);
+    assert!(run.err.contains("stopped on max_tokens"), "{}", run.err);
+}
+
+// Minutes is the unit a review is discussed in, so a bare number is one. The refusal states the whole grammar rather than the one form it just rejected.
+#[test]
+fn the_ceiling_is_read_as_minutes_and_says_so_when_it_cannot_be() {
+    let repo = Repo::new();
+    repo.declare(CLEAN, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    let run = repo.attest_within(AIM, "soon");
+    assert_eq!(run.code, 2, "{}", run.err);
+    assert!(run.err.contains("45m"), "{}", run.err);
+    let zero = repo.attest_within(AIM, "0");
+    assert_eq!(zero.code, 2, "{}", zero.err);
+    assert!(zero.err.contains("above zero"), "{}", zero.err);
+}
+
+// The id is chosen here and handed over, not read back out of the answer: read back it arrives only in an answer that a crashed, hung or killed run never produced, which is every case with something to diagnose. Assigned first, it names the transcript before anything can go wrong.
+#[test]
+fn the_reviewers_session_is_assigned_before_it_runs_and_resumed_by_name_after() {
+    let repo = Repo::new();
+    let escalating = concat!(
+        r#"n=$(cat rounds 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > rounds; "#,
+        r#"m=0; if [ "$n" = 1 ]; then m=1; fi; "#,
+        r#"echo "VERDICT: reviewer=fake session=s-1 major=$m moderate=0 minor=0""#
+    );
+    repo.declare_runner(escalating, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    let blocked = repo.attest(AIM);
+    assert_eq!(blocked.code, 1, "{}", blocked.err);
+    let assigned = repo.read("assigned-sessions");
+    let opening: Vec<&str> = assigned.lines().filter(|l| !l.trim().is_empty()).collect();
+    // The judge and the first review each open one; neither had a session to resume.
+    assert_eq!(opening.len(), 2, "{assigned}");
+    for id in &opening {
+        assert_eq!(id.len(), 36, "{id} is not a uuid");
+        assert_eq!(id.split('-').count(), 5, "{id} is not a uuid");
+        assert_eq!(&id[14..15], "4", "{id} is not a version 4 uuid");
+    }
+    assert_ne!(opening[0], opening[1], "two rounds took one id: {assigned}");
+    // The second round resumes the reviewer it already briefed, so it assigns nothing.
+    repo.write("src.rs", "reworked");
+    repo.stage(&["src.rs"]);
+    let message = repo.landed_again(3);
+    let after = repo.read("assigned-sessions");
+    let opened: Vec<&str> = after.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(
+        opened.len(),
+        2,
+        "a resumed round opened a new session: {after}"
+    );
+    assert!(message.contains("Reviewed-standards:"), "{message}");
+}
+
+// The reviewer that was cut off holds everything it had read; the round is taken up rather than paid for from the top. Nothing changed while it was gone, so it is told that and not that fixes were made.
+#[test]
+fn a_round_cut_short_is_resumed_where_it_stopped() {
+    let repo = Repo::new();
+    let hangs_once = concat!(
+        r#"n=$(cat rounds 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > rounds; "#,
+        r#"cat >> prompts; echo "[$AGENT_VERDICT_PRIOR_SESSION]" >> handed; "#,
+        r#"if [ "$n" = 1 ]; then sleep 60; fi; "#,
+        r#"echo "VERDICT: reviewer=fake session=s-1 major=0 moderate=0 minor=0""#
+    );
+    repo.declare_runner(hangs_once, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    let killed = repo.attest_within(AIM, "2s");
+    assert_eq!(killed.code, 2, "{}", killed.err);
+    // The reviewer got as far as writing its transcript, which is what makes the round worth taking up.
+    let cut_short = repo.last_assigned();
+    repo.transcript_for(&cut_short);
+
+    let resumed = repo.again();
+    assert_eq!(resumed.code, 0, "{}", resumed.err);
+    assert!(
+        resumed.err.contains("cut short mid-review"),
+        "{}",
+        resumed.err
+    );
+    assert!(resumed.err.contains(&cut_short), "{}", resumed.err);
+    // Handed back to the same reviewer, and told it was interrupted rather than re-reviewed.
+    assert!(
+        repo.read("handed").contains(&format!("[{cut_short}]")),
+        "{}",
+        repo.read("handed")
+    );
+    assert!(repo.prompts().contains("interrupted"), "{}", repo.prompts());
+    assert!(
+        !repo.prompts().contains("Fixes incorporated"),
+        "{}",
+        repo.prompts()
+    );
+}
+
+// A round that died before its reviewer wrote anything has nothing to take up, and a resume of it would be a refusal in place of a review.
+#[test]
+fn a_round_that_left_no_transcript_opens_a_fresh_reviewer() {
+    let repo = Repo::new();
+    let hangs_once = concat!(
+        r#"n=$(cat rounds 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > rounds; "#,
+        r#"cat >> prompts; "#,
+        r#"if [ "$n" = 1 ]; then sleep 60; fi; "#,
+        r#"echo "VERDICT: reviewer=fake session=s-1 major=0 moderate=0 minor=0""#
+    );
+    repo.declare_runner(hangs_once, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    let killed = repo.attest_within(AIM, "2s");
+    assert_eq!(killed.code, 2, "{}", killed.err);
+    let cut_short = repo.last_assigned();
+
+    let fresh = repo.again();
+    assert_eq!(fresh.code, 0, "{}", fresh.err);
+    assert!(!fresh.err.contains("cut short"), "{}", fresh.err);
+    assert_ne!(
+        repo.last_assigned(),
+        cut_short,
+        "the dead session was reused"
+    );
+    assert!(
+        !repo.prompts().contains("interrupted"),
+        "{}",
+        repo.prompts()
+    );
+}
+
+// The marker says a round is open, so recording its verdict must close it: left behind, it would resume a reviewer that had already answered and brief it as though it never had.
+#[test]
+fn a_recorded_round_leaves_no_marker_for_the_next_one_to_resume() {
+    let repo = Repo::new();
+    let escalating = concat!(
+        r#"n=$(cat rounds 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > rounds; "#,
+        r#"cat >> prompts; m=0; if [ "$n" = 1 ]; then m=1; fi; "#,
+        r#"echo "VERDICT: reviewer=fake session=s-1 major=$m moderate=0 minor=0""#
+    );
+    repo.declare_runner(escalating, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    let blocked = repo.attest(AIM);
+    assert_eq!(blocked.code, 1, "{}", blocked.err);
+    repo.write("src.rs", "reworked");
+    repo.stage(&["src.rs"]);
+    let again = repo.again();
+    assert_eq!(again.code, 0, "{}", again.err);
+    assert!(!again.err.contains("cut short"), "{}", again.err);
+    assert!(
+        repo.prompts().contains("Fixes incorporated"),
+        "{}",
+        repo.prompts()
+    );
+    assert!(
+        !repo.prompts().contains("interrupted"),
+        "{}",
+        repo.prompts()
+    );
+}
+
+// An agent can exit while something it spawned still holds the pipe it was writing to. Waiting for that pipe to close is waiting on a process this tool never started and cannot bound — the ceiling defeated by the one path that was meant not to need it.
+#[test]
+fn an_agent_that_leaves_its_pipe_held_open_does_not_hang_the_run() {
+    let repo = Repo::new();
+    // Backgrounded by the reviewer itself and left running as it exits, so the holder inherits the pipe and outlives the process that opened it.
+    let leaves_a_holder = concat!(
+        "sleep 120 &\n",
+        r#"python3 -c 'import json; print(json.dumps({"is_error": False, "result": "VERDICT: reviewer=fake session=s-1 major=0 moderate=0 minor=0", "session_id": "s-1", "modelUsage": {"fake-model": {}}}))'"#,
+        "\nexit 0"
+    );
+    repo.declare_agent(leaves_a_holder, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    let started = std::time::Instant::now();
+    let run = repo.attest(AIM);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(60),
+        "the run waited on a pipe its agent had already finished with: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(run.code, 0, "{}", run.err);
 }
