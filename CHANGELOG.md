@@ -4,6 +4,15 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [1.8.2] - 2026-08-17
+
+### Changed
+- The two lines about a run that died name the files they are talking about. Taking over said it
+  "claimed this repo", which is this tool's word for writing `.git/agent-verdict.lock` and tells a
+  reader nothing they can go and look at; it now names that file and says the process is gone.
+  Resuming said a round was "cut short", and now says the last run opened a review and never
+  recorded one, which is the observation the conclusion rests on.
+
 ## [1.8.1] - 2026-08-17
 
 ### Fixed

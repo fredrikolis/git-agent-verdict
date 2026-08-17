@@ -320,10 +320,12 @@ fn a_claim_left_by_a_dead_run_is_taken_over() {
     let run = repo.attest(AIM);
     assert!(run.out.contains("standards:"), "{}", run.err);
     // Cleared with a word, not in silence: the claim is the only record this tool holds that a run ended some other way than by finishing.
-    assert!(run.err.contains("did not finish"), "{}", run.err);
+    assert!(run.err.contains("stale lock file"), "{}", run.err);
     assert!(run.err.contains("pid 999999999"), "{}", run.err);
-    // What is known is when it claimed the repo; how long it ran is not recorded anywhere and is not claimed here.
-    assert!(run.err.contains("claimed this repo"), "{}", run.err);
+    // The file itself, named: "the claim" is this tool's word for it and tells a reader nothing they can go and look at.
+    assert!(run.err.contains("agent-verdict.lock"), "{}", run.err);
+    // How long it ran is recorded nowhere, so it is not claimed here.
+    assert!(!run.err.contains("when it stopped."), "{}", run.err);
 }
 
 // Nothing is holding it once the run is over, or the next attest meets its own leftovers.
@@ -610,14 +612,14 @@ fn a_round_cut_short_is_resumed_where_it_stopped() {
 
     let resumed = repo.again();
     assert_eq!(resumed.code, 0, "{}", resumed.err);
+    assert!(resumed.err.contains("died mid-review"), "{}", resumed.err);
+    assert!(resumed.err.contains(&cut_short), "{}", resumed.err);
+    // The one measured fact about the end. Everything else after a kill is inferred from markers written before it.
     assert!(
-        resumed.err.contains("cut short mid-review"),
+        resumed.err.contains("transcript was last written"),
         "{}",
         resumed.err
     );
-    assert!(resumed.err.contains(&cut_short), "{}", resumed.err);
-    // The one measured fact about the end. Everything else after a kill is inferred from markers written before it.
-    assert!(resumed.err.contains("last wrote"), "{}", resumed.err);
     // Handed back to the same reviewer, and told it was interrupted rather than re-reviewed.
     assert!(
         repo.read("handed").contains(&format!("[{cut_short}]")),
@@ -650,7 +652,7 @@ fn a_round_that_left_no_transcript_opens_a_fresh_reviewer() {
 
     let fresh = repo.again();
     assert_eq!(fresh.code, 0, "{}", fresh.err);
-    assert!(!fresh.err.contains("cut short"), "{}", fresh.err);
+    assert!(!fresh.err.contains("died mid-review"), "{}", fresh.err);
     assert_ne!(
         repo.last_assigned(),
         cut_short,
@@ -680,7 +682,7 @@ fn a_recorded_round_leaves_no_marker_for_the_next_one_to_resume() {
     repo.stage(&["src.rs"]);
     let again = repo.again();
     assert_eq!(again.code, 0, "{}", again.err);
-    assert!(!again.err.contains("cut short"), "{}", again.err);
+    assert!(!again.err.contains("died mid-review"), "{}", again.err);
     assert!(
         repo.prompts().contains("Fixes incorporated"),
         "{}",

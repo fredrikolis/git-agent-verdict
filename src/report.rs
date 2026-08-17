@@ -138,11 +138,14 @@ pub fn judging() {
     eprintln!("git-agent-verdict: judging the intent…");
 }
 
-// A claim with nothing running under it is this tool's one record that the last run did not end on its own terms, and clearing it in silence throws that away. What it reports is when the repo was claimed, not how long the run lasted: the claim records a start and nothing else, and it is read whenever the next run happens along — an hour later, that difference is an hour of running the tool would be inventing. What bounds the end is the reviewer's own last write, which `resuming` reports.
-pub fn abandoned(pid: &str, ago: u64) {
+// A claim with nothing running under it is this tool's one record that the last run did not end on its own terms, and clearing it in silence throws that away. What it reports is when the lock file was written, not how long the run lasted: the claim records a start and nothing else, and it is read whenever the next run happens along — an hour later, that difference is an hour of running the tool would be inventing. What bounds the end is the reviewer's own last write, which `resuming` reports.
+pub fn abandoned(pid: &str, path: &std::path::Path, ago: u64) {
     eprintln!(
-        "git-agent-verdict: the previous attest (pid {pid}) did not finish — it claimed this repo {ago}s ago. Taking its claim."
+        "git-agent-verdict: removing a stale lock file: {}",
+        path.display()
     );
+    eprintln!("  attest pid {pid} wrote it {ago}s ago and that process is gone, so it was killed or it crashed");
+    eprintln!("  the file records when it was written, not when that run stopped — nothing here dates the end");
 }
 
 // Said before the reviewer is spawned rather than after it answers, because a run that is killed never reaches the after. Without this line the shell holding a dead run has nothing saying which gate was in play or which session to go and read; with it, the two facts survive the kill.
@@ -160,10 +163,13 @@ pub fn still_reviewing(elapsed: u64, ceiling: u64) {
 
 // Said out loud because it is evidence the author does not otherwise have: a marker left behind means the last run died mid-review, which nothing else in this tool would ever mention. The reviewer picked up here is the one that was already reading, not a second one paid for from the top.
 pub fn resuming(gate: &str, session: &str, quiet_for: Option<u64>) {
-    eprintln!("git-agent-verdict: {gate}: the last run was cut short mid-review — resuming its reviewer, session {session}");
-    // The one measured fact about the end: everything else here is inferred from a marker that was written before the round began.
+    eprintln!("git-agent-verdict: {gate}: the last run opened a review and never recorded one, so it died mid-review");
+    eprintln!(
+        "  resuming that same reviewer rather than paying for the gate again — session {session}"
+    );
+    // The one measured fact about the end. That a round was open at all is inferred from a file written before it began; only the reviewer's own transcript was still being written as it died.
     if let Some(seconds) = quiet_for {
-        eprintln!("git-agent-verdict: {gate}: that reviewer last wrote {seconds}s ago");
+        eprintln!("  its transcript was last written {seconds}s ago, which is the closest thing to a time of death recorded anywhere");
     }
 }
 
