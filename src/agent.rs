@@ -145,110 +145,11 @@ fn claude(
         command.args(["--model", model]);
     }
     let told = |detail: String| with_transcript(&detail, session.id());
-    // Followed only for a review: the judge is one question answered in seconds, and a caller watching for signs of life is not waiting on that.
+    // Narrated only for a review: the judge is one question answered in seconds, and nobody is waiting on it for signs of life.
     let narrate = matches!(role, Role::Review);
-    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    if narrate {
-        follow(session.id(), &stop);
-    }
-    let said = piped(command, prompt, claude_ceiling(role, ceiling), narrate);
-    stop.store(true, std::sync::atomic::Ordering::Relaxed);
-    let said = said.map_err(told)?;
+    let said = piped(command, prompt, claude_ceiling(role, ceiling), narrate).map_err(told)?;
     let _ = std::fs::remove_file(&file);
     read_claude(&said).map_err(told)
-}
-
-// The agent writes its transcript as it works, so the file is the one live account of a review that otherwise says nothing for twenty minutes. Followed rather than read at the end: the question a caller has while waiting is whether anything is still happening.
-const FOLLOW_POLL: Duration = Duration::from_millis(500);
-
-// One line per event, never the event. A single tool_result runs to 16 KB and a whole transcript to megabytes, so a caller handed the bytes would have the review pasted into it in place of being told the review is running.
-fn event(line: &str) -> Option<String> {
-    let json: serde_json::Value = serde_json::from_str(line).ok()?;
-    if json["type"].as_str()? != "assistant" {
-        return None;
-    }
-    for item in json["message"]["content"].as_array()? {
-        match item["type"].as_str() {
-            Some("tool_use") => {
-                let name = item["name"].as_str().unwrap_or("tool");
-                let args: Vec<String> = item["input"]
-                    .as_object()?
-                    .values()
-                    .map(|v| abbreviated(&v.to_string(), 40))
-                    .collect();
-                return Some(format!("{name}({})", args.join(", ")));
-            }
-            Some("text") => return Some(format!("» {}", one_line(item["text"].as_str()?, 100))),
-            _ => {}
-        }
-    }
-    None
-}
-
-// A path is identified by its end and a command by its beginning, so an over-long value keeps whichever half says which file or which command this is. Cut from the front, every file under a deep root reads as the same line.
-fn abbreviated(text: &str, keep: usize) -> String {
-    let flat = flattened(text);
-    let len = flat.chars().count();
-    if len <= keep || !flat.contains('/') {
-        return one_line(&flat, keep);
-    }
-    let tail: String = flat.chars().skip(len.saturating_sub(keep)).collect();
-    format!("…{tail}")
-}
-
-fn flattened(text: &str) -> String {
-    text.chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect()
-}
-
-fn one_line(text: &str, keep: usize) -> String {
-    let flat = flattened(text);
-    match flat.char_indices().nth(keep) {
-        Some((cut, _)) => format!("{}…", flat[..cut].trim_end()),
-        None => flat,
-    }
-}
-
-// Polled from a byte offset, and only ever past the last newline: the agent is appending as this reads, and a line torn in half parses as nothing and would be lost when the rest arrived.
-fn follow(session: &str, stop: &std::sync::Arc<std::sync::atomic::AtomicBool>) {
-    use std::io::{BufRead, BufReader, Seek, SeekFrom};
-    let (session, stop) = (session.to_string(), std::sync::Arc::clone(stop));
-    std::thread::spawn(move || {
-        let mut at = 0u64;
-        while !stop.load(std::sync::atomic::Ordering::Relaxed) {
-            std::thread::sleep(FOLLOW_POLL);
-            let Some(path) = transcript(&session) else {
-                continue;
-            };
-            let Ok(file) = std::fs::File::open(&path) else {
-                continue;
-            };
-            let mut reader = BufReader::new(file);
-            if reader.seek(SeekFrom::Start(at)).is_err() {
-                continue;
-            }
-            let mut line = String::new();
-            loop {
-                line.clear();
-                match reader.read_line(&mut line) {
-                    Ok(0) => break,
-                    // Torn: what is here has no newline yet, so it is left for the next pass to read whole.
-                    Ok(read) if !line.ends_with('\n') => {
-                        let _ = read;
-                        break;
-                    }
-                    Ok(read) => {
-                        at += read as u64;
-                        if let Some(said) = event(&line) {
-                            crate::report::progress(&said);
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-        }
-    });
 }
 
 // Both halves of what the agent said. Its stderr is kept whatever the exit status, because the two do not agree: an agent can crash on stderr and still exit 0, and then the only account of what went wrong is the half a caller that trusts the status throws away.
@@ -405,14 +306,24 @@ fn slug(dir: &std::path::Path) -> String {
         .collect()
 }
 
-// Where the reviewer's own account of the round is: every file it read, every tool that answered it, and whatever it was in the middle of when it stopped. This tool reports what the reviewer said; the transcript is what it did, and after a failure that is the difference between a diagnosis and a shrug.
+// Where the agent will write, derived and never checked: it is named to a caller before the review starts, which is before there is any file to find.
+pub fn transcript_path(session: &str) -> Option<std::path::PathBuf> {
+    let home = std::env::var("HOME").ok()?;
+    Some(
+        std::path::Path::new(&home)
+            .join(".claude")
+            .join("projects")
+            .join(slug(&std::env::current_dir().ok()?))
+            .join(format!("{session}.jsonl")),
+    )
+}
+
+// The reviewer's own account of the round: every file it read, every tool that answered it, and whatever it was in the middle of when it stopped. This tool reports what the reviewer said; the transcript is what it did, and after a failure that is the difference between a diagnosis and a shrug. Checked here, because a path named in an error has to be one that exists.
 pub fn transcript(session: &str) -> Option<std::path::PathBuf> {
     let home = std::env::var("HOME").ok()?;
     let projects = std::path::Path::new(&home).join(".claude").join("projects");
     let named = format!("{session}.jsonl");
-    let derived = projects
-        .join(slug(&std::env::current_dir().ok()?))
-        .join(&named);
+    let derived = transcript_path(session)?;
     if derived.is_file() {
         return Some(derived);
     }

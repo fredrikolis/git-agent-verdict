@@ -148,17 +148,23 @@ pub fn abandoned(pid: &str, path: &std::path::Path, ago: u64) {
     eprintln!("  the file records when it was written, not when that run stopped — nothing here dates the end");
 }
 
-// Said before the reviewer is spawned rather than after it answers, because a run that is killed never reaches the after. Without this line the shell holding a dead run has nothing saying which gate was in play or which session to go and read; with it, the two facts survive the kill.
-pub fn reviewing(gate: &str, session: &str) {
+// The agent's own transcript, and the one command that reads it: a caller asking whether the review is still going gets an answer for one line of output, and pays nothing while it does not ask. Handed the command rather than a digest rendered here — a format invented here is a format maintained here for ever, and the transcript belongs to the agent.
+const LATEST: &str = r#"jq -rc 'select(.type=="assistant") | .timestamp[11:19] as $t | .message.content[] | if .type=="tool_use" then "\($t) \(.name) \(.input|tostring|gsub("\n";" "))" elif .type=="text" then "\($t) » \(.text|gsub("\n";" "))" else empty end'"#;
+
+// Said before the reviewer is spawned rather than after it answers, because a run that is killed never reaches the after: which gate was in play, which session to read, and the command that reads it all survive the kill.
+pub fn reviewing(gate: &str, session: &str, transcript: Option<&std::path::Path>) {
     eprintln!(
         "git-agent-verdict: {gate}: reviewing — session {session}, pid {}",
         std::process::id()
     );
-}
-
-// What the reviewer is doing, as it does it, one line per event. The question a caller has during a twenty-minute review is whether anything is still happening, and until this there was no answer but silence.
-pub fn progress(said: &str) {
-    eprintln!("  · {said}");
+    let Some(path) = transcript else {
+        return;
+    };
+    println!("progress log being appended here: {}", path.display());
+    println!(
+        "  latest activity: {LATEST} {} | cut -c1-110 | tail -5",
+        path.display()
+    );
 }
 
 // The elapsed time, which is the number that tells a kill apart from a hang: thirteen seconds and ten minutes read exactly alike in a shell that reports only that something died.
@@ -198,14 +204,22 @@ pub fn audited(gate: &str, verdicts: &[Verdict], findings: &str) {
     }
 }
 
+// Said where it happened and not only at the end: the gates after it are still to run, and a failure scrolled past ten minutes ago is one the reader has to go looking for.
+pub fn gate_failed(gate: &str, detail: &str) {
+    eprintln!("git-agent-verdict: error: {gate}: no verdict — {detail}");
+}
+
 // What to do with it, which is not "attest again": the findings are about code no commit is touching, so acting on them makes changes that are then attested in the ordinary way.
-pub fn audit_done(gates: usize, blocked: bool) {
+pub fn audit_done(gates: usize, blocked: bool, failed: &[String]) {
     let rung = if blocked {
         "including MAJOR"
     } else {
         "no MAJOR"
     };
     eprintln!("\ngit-agent-verdict: audited {gates} gate(s), {rung}.");
+    if !failed.is_empty() {
+        eprintln!("  no verdict from: {}", failed.join(", "));
+    }
     eprintln!("next: fix what the reports name, in commits attested from their own diffs");
 }
 

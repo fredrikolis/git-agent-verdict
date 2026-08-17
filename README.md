@@ -123,19 +123,18 @@ agent-verdict gates mandated by repo:
 next: address the findings, then attest again for annotations
 ```
 
-A review prints what the reviewer is doing as it does it, one line per event, read from the
-transcript the agent writes while it works:
+A review names its transcript and the command that reads it, before it starts:
 
 ```
-git-agent-verdict: standards: reviewing — session eda8a571…, pid 2603531
-  · » I'll review the repository's Rust files against the style gate criteria…
-  · Bash("git ls-files -- '*.rs'", "List all Rust files in the repository")
-  · Read(…/livecheck/lib.rs")
+progress log being appended here: ~/.claude/projects/<slug>/<session>.jsonl
+  latest activity: jq -rc '…' <path> | cut -c1-110 | tail -5
 ```
 
-One line per event, never the event: a single tool result runs to 16 KB and a whole transcript to
-megabytes, so a caller handed the bytes would have the review pasted into it in place of being told
-the review is running. Where nothing happens at all, the elapsed time still prints every minute.
+That answers "is it still going" for one line of output, and for nothing at all while nobody asks.
+The command is handed over rather than a digest rendered here: a transcript line runs to 16 KB and a
+whole transcript to megabytes, so streaming it would paste the review into the caller, and a summary
+format invented here is one maintained here for ever while the transcript stays the agent's to
+change.
 
 A review that stops answering is killed and reported, rather than left for whatever shell is holding
 the run to kill without a word: the ceiling is 30 minutes, and `--timeout <minutes>` raises it where

@@ -4,6 +4,24 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [1.11.0] - 2026-08-17
+
+### Fixed
+- `audit`'s background-shell guard printed an `attest` remedy, so a caller who copied it verbatim
+  ran a different operation, one that commits, and a caller who copied it faithfully hit an error
+  because `audit` rejects `--intent`. The guard is now written per verb, and `audit` asks for the
+  whole-repo confirmation first, so the first refusal a caller reads is about `audit`.
+- `audit` abandoned every remaining gate when one gate's reviewer failed, throwing away reviews the
+  run had already paid for. It now sweeps every gate, names the ones that gave no verdict, and
+  fails at the end.
+
+### Changed
+- A review names its transcript and the command that reads it instead of streaming events. A long
+  review emits 1393 of them, which is tens of thousands of tokens in a caller that only wanted to
+  know whether anything was still happening. Naming the file costs one line and answers the same
+  question on demand, and the rendering stays the agent's rather than becoming this tool's to
+  maintain.
+
 ## [1.10.0] - 2026-08-17
 
 ### Added

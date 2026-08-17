@@ -273,7 +273,11 @@ pub fn run(asked: Option<&str>, ceiling: std::time::Duration) -> Result<bool, St
     }
     // Written down before the reviewer is spawned, which is the whole point of choosing the session here: after this line, a run that dies leaves something that names what it was doing and what to take up.
     state::open_round(&declaration.gate, round.session.id(), round.tries)?;
-    report::reviewing(&declaration.gate, round.session.id());
+    report::reviewing(
+        &declaration.gate,
+        round.session.id(),
+        crate::agent::transcript_path(round.session.id()).as_deref(),
+    );
     let (verdicts, findings) = review(declaration, &agent, intent, &round, ceiling)?;
     let blocked = verdicts.iter().any(Verdict::blocks);
     state::record(&declaration.gate, &verdicts, blocked)?;

@@ -795,52 +795,77 @@ fn the_whole_repo_flag_is_in_no_usage_line() {
     assert!(!guide.out.contains("--confirm-reviewing"), "{}", guide.out);
 }
 
-// Twenty minutes of silence and twenty minutes of a dead process read the same. The reviewer writes its transcript as it works, so following that file answers the only question a caller has while waiting.
+// A twenty-minute review that says nothing until it ends leaves a caller unable to tell a live one from a dead one. Naming the transcript and the command that reads it answers that for one line of output, and for nothing at all while nobody asks.
 #[test]
-fn what_the_reviewer_is_doing_reaches_the_caller_while_it_works() {
+fn a_review_names_its_transcript_and_how_to_read_it() {
     let repo = Repo::new();
-    // The stub plays the agent: it writes transcript events where the real one would, then answers.
-    let writes_events = concat!(
-        r#"slug=$(printf %s "$PWD" | tr -c 'A-Za-z0-9' '-'); "#,
-        r#"d="$HOME/.claude/projects/$slug"; mkdir -p "$d"; f="$d/$assigned.jsonl"; "#,
-        r#"printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"src/lock.rs"}}]}}' >> "$f"; "#,
-        r#"printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"Reading the claim now"}]}}' >> "$f"; "#,
-        r#"sleep 2; "#,
-        r#"echo "VERDICT: reviewer=fake session=s-1 major=0 moderate=0 minor=0""#
-    );
-    repo.declare_runner(writes_events, &[STANDARDS]);
+    repo.declare(CLEAN, &[STANDARDS]);
     repo.stage(&["src.rs"]);
     let run = repo.attest(AIM);
     assert_eq!(run.code, 0, "{}", run.err);
-    assert!(run.err.contains("Read(\"src/lock.rs\")"), "{}", run.err);
-    assert!(run.err.contains("» Reading the claim now"), "{}", run.err);
+    assert!(
+        run.out.contains("progress log being appended here:"),
+        "{}",
+        run.out
+    );
+    assert!(run.out.contains(".jsonl"), "{}", run.out);
+    // The command, not a digest this tool renders: the transcript's shape is the agent's to change.
+    assert!(run.out.contains("latest activity: jq"), "{}", run.out);
+    assert!(run.out.contains("tail -5"), "{}", run.out);
 }
 
-// A transcript runs to megabytes and one tool result to 16 KB. Handed the bytes, a caller has the review pasted into it instead of being told the review is running.
+// The guard printed one hardcoded attest example whichever verb was run, so an audit's caller was told to run attest, which is a different operation and commits.
 #[test]
-fn a_followed_event_is_a_line_not_the_event() {
+fn audits_foreground_guard_teaches_audit_not_attest() {
     let repo = Repo::new();
-    let big = "x".repeat(4000);
-    let writes_a_huge_event = format!(
-        concat!(
-            r#"slug=$(printf %s "$PWD" | tr -c 'A-Za-z0-9' '-'); "#,
-            r#"d="$HOME/.claude/projects/$slug"; mkdir -p "$d"; f="$d/$assigned.jsonl"; "#,
-            r#"printf '%s\n' '{{"type":"assistant","message":{{"content":[{{"type":"text","text":"{}"}}]}}}}' >> "$f"; "#,
-            r#"printf '%s\n' '{{"type":"user","message":{{"content":[{{"type":"tool_result","content":"{}"}}]}}}}' >> "$f"; "#,
-            r#"sleep 2; "#,
-            r#"echo "VERDICT: reviewer=fake session=s-1 major=0 moderate=0 minor=0""#
-        ),
-        big, big
-    );
-    repo.declare_runner(&writes_a_huge_event, &[STANDARDS]);
+    repo.declare(CLEAN, &[STANDARDS]);
     repo.stage(&["src.rs"]);
-    let run = repo.attest(AIM);
-    assert_eq!(run.code, 0, "{}", run.err);
-    // The assistant's own text is clipped, and a tool result is not echoed at all.
-    let longest = run.err.lines().map(str::len).max().unwrap_or(0);
+    let root = repo.root();
+    let bare = repo.capture(&["audit", "--repo", &root]);
+    assert_eq!(bare.code, 2, "{}", bare.err);
+    // With nothing given, the first thing read is what audit does, not how to run attest.
+    assert!(bare.err.contains("not the staged diff"), "{}", bare.err);
+    // The usage block below carries every verb's flags; what must not appear is a remedy telling this caller to run attest.
     assert!(
-        longest < 400,
-        "a line of {longest} chars reached the caller"
+        !bare.err.contains("git agent-verdict attest --repo"),
+        "{}",
+        bare.err
     );
-    assert!(run.err.contains('…'), "{}", run.err);
+    let shell = repo.capture(&["audit", "--repo", &root, common::WHOLE]);
+    assert_eq!(shell.code, 2, "{}", shell.err);
+    assert!(
+        shell.err.contains("git agent-verdict audit"),
+        "{}",
+        shell.err
+    );
+    assert!(
+        !shell.err.contains("git agent-verdict attest --repo"),
+        "{}",
+        shell.err
+    );
+    assert!(!shell.err.contains("--intent \""), "{}", shell.err);
+    assert!(
+        shell.err.contains("every file each gate reaches"),
+        "{}",
+        shell.err
+    );
+}
+
+// A survey that stops at the first gate whose reviewer failed throws away every gate that answered, and the run had already paid for them.
+#[test]
+fn audit_sweeps_every_gate_even_when_one_reviewer_fails() {
+    let repo = Repo::new();
+    let second = r#""$1" ann --doc rubric.md --path ."#;
+    let per_gate = concat!(
+        r#"if grep -q "the standards gate" "$AGENT_VERDICT_SYSTEM" 2>/dev/null; then "#,
+        r#"echo "nothing this tool can record"; else "#,
+        r#"echo "VERDICT: reviewer=fake session=s-1 major=0 moderate=1 minor=0"; fi"#
+    );
+    repo.declare_runner(per_gate, &[STANDARDS, second]);
+    repo.stage(&["src.rs"]);
+    let run = repo.audit();
+    assert_eq!(run.code, 2, "{}", run.err);
+    // The gate that answered still reported, and the one that did not is named.
+    assert!(run.out.contains("ann: major=0 moderate=1"), "{}", run.out);
+    assert!(run.err.contains("no verdict from"), "{}", run.err);
 }

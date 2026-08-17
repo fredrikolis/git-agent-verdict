@@ -20,7 +20,11 @@ fn sweep(
 ) -> Result<(Vec<Verdict>, String), String> {
     let system = crate::brief::system(declaration, crate::brief::Reach::Whole)?;
     let session = Session::opened();
-    report::reviewing(&declaration.gate, session.id());
+    report::reviewing(
+        &declaration.gate,
+        session.id(),
+        crate::agent::transcript_path(session.id()).as_deref(),
+    );
     let answer = agent.run(
         crate::agent::Role::Review,
         &system,
@@ -33,26 +37,41 @@ fn sweep(
     Ok((verdicts, runner::findings(&answer.text)))
 }
 
-// Every gate, not the next one: an audit is a survey, and stopping at the first gate with something to say would leave the rest of the rubric unread. One gate's reviewer failing is still fatal — a survey missing a gate is not a survey, and reporting it as clean would be a lie about the gate that never ran.
+// Every gate in one pass, and it does not stop for anything it finds: an audit is a survey, not a procedure the author works through a step at a time. A gate whose reviewer fails does not take the rest with it either — the run that was going to cost a full review per gate should not throw away the ones that answered. What failed is named at the end, and fails the run there.
 pub fn run(ceiling: std::time::Duration) -> Result<bool, String> {
     let hook = declarations::read()?;
     let agent = runner::configured()?;
     report::auditing(&hook.path);
     let mut blocked = false;
     let mut reviewed = 0;
+    let mut failed: Vec<String> = Vec::new();
     for declaration in &hook.gates {
         if !reaches(declaration)? {
             report::skipped(&declaration.gate, &declaration.paths);
             continue;
         }
-        let (verdicts, findings) = sweep(declaration, &agent, ceiling)?;
-        blocked |= verdicts.iter().any(Verdict::blocks);
-        reviewed += 1;
-        report::audited(&declaration.gate, &verdicts, &findings);
+        match sweep(declaration, &agent, ceiling) {
+            Ok((verdicts, findings)) => {
+                blocked |= verdicts.iter().any(Verdict::blocks);
+                reviewed += 1;
+                report::audited(&declaration.gate, &verdicts, &findings);
+            }
+            Err(said) => {
+                report::gate_failed(&declaration.gate, &said);
+                failed.push(declaration.gate.clone());
+            }
+        }
     }
-    if reviewed == 0 {
+    if reviewed == 0 && failed.is_empty() {
         return Err(format!("{} declared no gate this tree reaches", hook.path));
     }
-    report::audit_done(reviewed, blocked);
+    report::audit_done(reviewed, blocked, &failed);
+    // Reported as it happened and refused here: a survey that lost a gate is not a survey, and an exit saying otherwise would be a claim about the gate that never ran.
+    if !failed.is_empty() {
+        return Err(format!(
+            "no verdict from {}: the audit is incomplete",
+            failed.join(", ")
+        ));
+    }
     Ok(!blocked)
 }

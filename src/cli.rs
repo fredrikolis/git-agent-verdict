@@ -232,24 +232,46 @@ fn target(p: &Parsed) -> Result<String, String> {
     Ok(path)
 }
 
-// Optional once a review has recorded one: the diary holds the aim, it may not change without a MAJOR, and retyping it can only fail.
-const FOREGROUND: &str = "a review reads every rubric in full and the whole staged diff, and often runs \
-for ten minutes or more.\nA foreground shell will kill it partway.\
-\n\nStart it in a BACKGROUND shell with a long timeout, then say so:\n\n  \
-git agent-verdict attest --repo <abs path to the repo root> \\\n    \
---intent \"<the aim, one flat line>\" \\\n    \
---confirm-running-in-background-shell-with-long-timeout\n\nThe flag asserts; it cannot check. \
-It is here because this is worth reading once, and this is when.\n\nRun it directly — no wait loop. \
-attest holds the repo while it runs, and a second one refuses at once naming what holds it.\
-\n\nLet the shell capture what it prints; do not redirect it to a file. Under a redirect a run that \
-is killed leaves an empty capture and a truncated log, and the reviewer's own error — the one worth \
-reading — is in neither.\n\nA killed run is usually not lost work: the reviewer's session is named before it starts, and \
-the next attest takes up the round where it stopped — where that reviewer had got far enough to \
-leave a transcript behind.";
+// One text, and the verb it is printed for fills it in. Hardcoded to attest it told an audit's caller to run attest, which is not the same operation: audit reviews every file each gate reaches and lands nothing, attest reviews the staged diff and commits. A remedy copied verbatim has to be the command the reader ran.
+fn foreground(verb: &str, reads: &str, confirmations: &str) -> String {
+    format!(
+        "a review reads every rubric in full and {reads}, and often runs for ten minutes or more.\n\
+         A foreground shell will kill it partway.\n\n\
+         Start it in a BACKGROUND shell with a long timeout, then say so:\n\n  \
+         git agent-verdict {verb} --repo <abs path to the repo root> \\\n{confirmations}\n\n\
+         The flag asserts; it cannot check. It is here because this is worth reading once, and this \
+         is when.\n\nRun it directly — no wait loop. {verb} holds the repo while it runs, and a \
+         second one refuses at once naming what holds it.\n\nLet the shell capture what it prints; \
+         do not redirect it to a file. Under a redirect a run that is killed leaves an empty capture \
+         and a truncated log, and the reviewer's own error — the one worth reading — is in neither."
+    )
+}
+
+fn attest_foreground() -> String {
+    let mut said = foreground(
+        "attest",
+        "the whole staged diff",
+        "    --intent \"<the aim, one flat line>\" \\\n    --confirm-running-in-background-shell-with-long-timeout",
+    );
+    said.push_str(
+        "\n\nA killed run is usually not lost work: the reviewer's session is named before it \
+         starts, and the next attest takes up the round where it stopped — where that reviewer had \
+         got far enough to leave a transcript behind.",
+    );
+    said
+}
+
+fn audit_foreground() -> String {
+    foreground(
+        "audit",
+        "every file each gate reaches",
+        "    --confirm-reviewing-the-whole-repo-not-a-commit \\\n    --confirm-running-in-background-shell-with-long-timeout",
+    )
+}
 
 fn attest(p: &Parsed) -> Result<Mode, String> {
     if !p.background {
-        return Err(FOREGROUND.to_string());
+        return Err(attest_foreground());
     }
     let repo = target(p)?;
     let ceiling = match &p.timeout {
@@ -298,11 +320,12 @@ say so:\n\n  git agent-verdict audit --repo <abs path to the repo root> \\\n    
 --confirm-running-in-background-shell-with-long-timeout";
 
 fn audit(p: &Parsed) -> Result<Mode, String> {
-    if !p.background {
-        return Err(FOREGROUND.to_string());
-    }
+    // Asked before the background shell is: what this verb does differently is the thing a caller reaching for it by mistake needs first, and a guard that teaches the shell first teaches it about a run it should not be making.
     if !p.whole {
         return Err(NOT_A_COMMIT.to_string());
+    }
+    if !p.background {
+        return Err(audit_foreground());
     }
     let repo = target(p)?;
     let ceiling = match &p.timeout {
