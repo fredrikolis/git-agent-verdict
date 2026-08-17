@@ -322,6 +322,8 @@ fn a_claim_left_by_a_dead_run_is_taken_over() {
     // Cleared with a word, not in silence: the claim is the only record this tool holds that a run ended some other way than by finishing.
     assert!(run.err.contains("did not finish"), "{}", run.err);
     assert!(run.err.contains("pid 999999999"), "{}", run.err);
+    // What is known is when it claimed the repo; how long it ran is not recorded anywhere and is not claimed here.
+    assert!(run.err.contains("claimed this repo"), "{}", run.err);
 }
 
 // Nothing is holding it once the run is over, or the next attest meets its own leftovers.
@@ -614,6 +616,8 @@ fn a_round_cut_short_is_resumed_where_it_stopped() {
         resumed.err
     );
     assert!(resumed.err.contains(&cut_short), "{}", resumed.err);
+    // The one measured fact about the end. Everything else after a kill is inferred from markers written before it.
+    assert!(resumed.err.contains("last wrote"), "{}", resumed.err);
     // Handed back to the same reviewer, and told it was interrupted rather than re-reviewed.
     assert!(
         repo.read("handed").contains(&format!("[{cut_short}]")),

@@ -329,6 +329,12 @@ pub fn transcript(session: &str) -> Option<std::path::PathBuf> {
         .find(|path| path.is_file())
 }
 
+// How long ago the reviewer last wrote to its own transcript, which is the closest thing to a time of death this side holds: a run killed by something else writes nothing on its way out, so the last line the agent managed is what dates the end. None where no transcript was ever written.
+pub fn last_wrote(session: &str) -> Option<u64> {
+    let written = transcript(session)?.metadata().ok()?.modified().ok()?;
+    Some(written.elapsed().ok()?.as_secs())
+}
+
 // Named only where it exists: a path invented for a message sends the author to an empty prompt, which is worse than saying nothing.
 fn with_transcript(detail: &str, session: &str) -> String {
     match transcript(session) {

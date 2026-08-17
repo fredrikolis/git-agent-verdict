@@ -265,7 +265,11 @@ pub fn run(asked: Option<&str>, ceiling: std::time::Duration) -> Result<bool, St
     let agent = crate::runner::configured()?;
     let round = round_for(declaration, &steps)?;
     if matches!(round.opening, Opening::Interrupted) {
-        report::resuming(&declaration.gate, round.session.id());
+        report::resuming(
+            &declaration.gate,
+            round.session.id(),
+            crate::agent::last_wrote(round.session.id()),
+        );
     }
     // Written down before the reviewer is spawned, which is the whole point of choosing the session here: after this line, a run that dies leaves something that names what it was doing and what to take up.
     state::open_round(&declaration.gate, round.session.id(), round.tries)?;

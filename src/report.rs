@@ -138,10 +138,10 @@ pub fn judging() {
     eprintln!("git-agent-verdict: judging the intent…");
 }
 
-// A claim with nothing running under it is the one record that the last run did not end on its own terms, and how long it had been going when it stopped. Clearing it in silence throws away the only evidence of a kill this tool ever holds.
-pub fn abandoned(pid: &str, held: u64) {
+// A claim with nothing running under it is this tool's one record that the last run did not end on its own terms, and clearing it in silence throws that away. What it reports is when the repo was claimed, not how long the run lasted: the claim records a start and nothing else, and it is read whenever the next run happens along — an hour later, that difference is an hour of running the tool would be inventing. What bounds the end is the reviewer's own last write, which `resuming` reports.
+pub fn abandoned(pid: &str, ago: u64) {
     eprintln!(
-        "git-agent-verdict: the previous attest (pid {pid}) did not finish — it was {held}s in when it stopped. Taking its claim."
+        "git-agent-verdict: the previous attest (pid {pid}) did not finish — it claimed this repo {ago}s ago. Taking its claim."
     );
 }
 
@@ -159,8 +159,12 @@ pub fn still_reviewing(elapsed: u64, ceiling: u64) {
 }
 
 // Said out loud because it is evidence the author does not otherwise have: a marker left behind means the last run died mid-review, which nothing else in this tool would ever mention. The reviewer picked up here is the one that was already reading, not a second one paid for from the top.
-pub fn resuming(gate: &str, session: &str) {
+pub fn resuming(gate: &str, session: &str, quiet_for: Option<u64>) {
     eprintln!("git-agent-verdict: {gate}: the last run was cut short mid-review — resuming its reviewer, session {session}");
+    // The one measured fact about the end: everything else here is inferred from a marker that was written before the round began.
+    if let Some(seconds) = quiet_for {
+        eprintln!("git-agent-verdict: {gate}: that reviewer last wrote {seconds}s ago");
+    }
 }
 
 // Where each gate stands once a run is over, and why it is not in play when it is not. Nothing is under review by then, so there is no running state to show.

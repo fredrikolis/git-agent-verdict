@@ -4,6 +4,15 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [1.8.1] - 2026-08-17
+
+### Fixed
+- Taking over the claim of a run that died reported how long that run had lasted, which the claim
+  does not record: it holds a start, and the difference was measured whenever the next run happened
+  along — an hour later it read as an hour of reviewing. It now reports when the repo was claimed,
+  and resuming an interrupted round reports when that reviewer last wrote to its transcript, which
+  is the one measured fact about the end.
+
 ## [1.8.0] - 2026-08-16
 
 ### Added
