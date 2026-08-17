@@ -4,6 +4,17 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [1.10.0] - 2026-08-17
+
+### Added
+- `attest` and `audit` print what the reviewer is doing as it does it, one line per event, followed
+  from the transcript the agent writes while it works. A twenty-minute review said nothing until it
+  finished, and a caller had no way to tell a live review from a dead one. One line per event and
+  never the event: a single tool result runs to 16 KB and a transcript to megabytes, so streaming
+  the bytes would paste the review into the caller instead of telling it the review is running.
+  An over-long value keeps the half that identifies it, the end of a path and the start of a
+  command.
+
 ## [1.9.0] - 2026-08-17
 
 ### Added

@@ -156,6 +156,11 @@ pub fn reviewing(gate: &str, session: &str) {
     );
 }
 
+// What the reviewer is doing, as it does it, one line per event. The question a caller has during a twenty-minute review is whether anything is still happening, and until this there was no answer but silence.
+pub fn progress(said: &str) {
+    eprintln!("  · {said}");
+}
+
 // The elapsed time, which is the number that tells a kill apart from a hang: thirteen seconds and ten minutes read exactly alike in a shell that reports only that something died.
 pub fn still_reviewing(elapsed: u64, ceiling: u64) {
     eprintln!("git-agent-verdict: still reviewing — {elapsed}s of {ceiling}s");

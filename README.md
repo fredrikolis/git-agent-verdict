@@ -123,6 +123,20 @@ agent-verdict gates mandated by repo:
 next: address the findings, then attest again for annotations
 ```
 
+A review prints what the reviewer is doing as it does it, one line per event, read from the
+transcript the agent writes while it works:
+
+```
+git-agent-verdict: standards: reviewing — session eda8a571…, pid 2603531
+  · » I'll review the repository's Rust files against the style gate criteria…
+  · Bash("git ls-files -- '*.rs'", "List all Rust files in the repository")
+  · Read(…/livecheck/lib.rs")
+```
+
+One line per event, never the event: a single tool result runs to 16 KB and a whole transcript to
+megabytes, so a caller handed the bytes would have the review pasted into it in place of being told
+the review is running. Where nothing happens at all, the elapsed time still prints every minute.
+
 A review that stops answering is killed and reported, rather than left for whatever shell is holding
 the run to kill without a word: the ceiling is 30 minutes, and `--timeout <minutes>` raises it where
 a review here is genuinely longer. A reviewer that crashes, answers with no verdict, or is cut off

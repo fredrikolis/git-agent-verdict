@@ -794,3 +794,53 @@ fn the_whole_repo_flag_is_in_no_usage_line() {
     let guide = repo.capture(&["--repo-setup-guide"]);
     assert!(!guide.out.contains("--confirm-reviewing"), "{}", guide.out);
 }
+
+// Twenty minutes of silence and twenty minutes of a dead process read the same. The reviewer writes its transcript as it works, so following that file answers the only question a caller has while waiting.
+#[test]
+fn what_the_reviewer_is_doing_reaches_the_caller_while_it_works() {
+    let repo = Repo::new();
+    // The stub plays the agent: it writes transcript events where the real one would, then answers.
+    let writes_events = concat!(
+        r#"slug=$(printf %s "$PWD" | tr -c 'A-Za-z0-9' '-'); "#,
+        r#"d="$HOME/.claude/projects/$slug"; mkdir -p "$d"; f="$d/$assigned.jsonl"; "#,
+        r#"printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"src/lock.rs"}}]}}' >> "$f"; "#,
+        r#"printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"Reading the claim now"}]}}' >> "$f"; "#,
+        r#"sleep 2; "#,
+        r#"echo "VERDICT: reviewer=fake session=s-1 major=0 moderate=0 minor=0""#
+    );
+    repo.declare_runner(writes_events, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    let run = repo.attest(AIM);
+    assert_eq!(run.code, 0, "{}", run.err);
+    assert!(run.err.contains("Read(\"src/lock.rs\")"), "{}", run.err);
+    assert!(run.err.contains("» Reading the claim now"), "{}", run.err);
+}
+
+// A transcript runs to megabytes and one tool result to 16 KB. Handed the bytes, a caller has the review pasted into it instead of being told the review is running.
+#[test]
+fn a_followed_event_is_a_line_not_the_event() {
+    let repo = Repo::new();
+    let big = "x".repeat(4000);
+    let writes_a_huge_event = format!(
+        concat!(
+            r#"slug=$(printf %s "$PWD" | tr -c 'A-Za-z0-9' '-'); "#,
+            r#"d="$HOME/.claude/projects/$slug"; mkdir -p "$d"; f="$d/$assigned.jsonl"; "#,
+            r#"printf '%s\n' '{{"type":"assistant","message":{{"content":[{{"type":"text","text":"{}"}}]}}}}' >> "$f"; "#,
+            r#"printf '%s\n' '{{"type":"user","message":{{"content":[{{"type":"tool_result","content":"{}"}}]}}}}' >> "$f"; "#,
+            r#"sleep 2; "#,
+            r#"echo "VERDICT: reviewer=fake session=s-1 major=0 moderate=0 minor=0""#
+        ),
+        big, big
+    );
+    repo.declare_runner(&writes_a_huge_event, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    let run = repo.attest(AIM);
+    assert_eq!(run.code, 0, "{}", run.err);
+    // The assistant's own text is clipped, and a tool result is not echoed at all.
+    let longest = run.err.lines().map(str::len).max().unwrap_or(0);
+    assert!(
+        longest < 400,
+        "a line of {longest} chars reached the caller"
+    );
+    assert!(run.err.contains('…'), "{}", run.err);
+}
