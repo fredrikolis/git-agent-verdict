@@ -173,6 +173,37 @@ pub fn resuming(gate: &str, session: &str, quiet_for: Option<u64>) {
     }
 }
 
+// Named at the top because the cost is the surprise: one full review per gate, against a tree nobody is changing.
+pub fn auditing(hook: &str) {
+    eprintln!(
+        "git-agent-verdict: auditing the whole repository against every gate {hook} declares"
+    );
+    eprintln!("  one review per gate, on the tree as it stands. Nothing is recorded and nothing is committed.");
+}
+
+// The same shape a review reports at a gate, minus what only a commit has: no token, no trailer, and no next gate to attest, because an audit is not driving anything to a commit.
+pub fn audited(gate: &str, verdicts: &[Verdict], findings: &str) {
+    println!("{gate}: {}", summarize(verdicts));
+    if findings.is_empty() {
+        return;
+    }
+    match logged(gate, findings) {
+        Some(path) => eprintln!("  the full report: {}", path.display()),
+        None => eprintln!("\n{findings}"),
+    }
+}
+
+// What to do with it, which is not "attest again": the findings are about code no commit is touching, so acting on them makes changes that are then attested in the ordinary way.
+pub fn audit_done(gates: usize, blocked: bool) {
+    let rung = if blocked {
+        "including MAJOR"
+    } else {
+        "no MAJOR"
+    };
+    eprintln!("\ngit-agent-verdict: audited {gates} gate(s), {rung}.");
+    eprintln!("next: fix what the reports name, in commits attested from their own diffs");
+}
+
 // Where each gate stands once a run is over, and why it is not in play when it is not. Nothing is under review by then, so there is no running state to show.
 pub enum Standing {
     Passed(String),

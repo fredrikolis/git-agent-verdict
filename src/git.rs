@@ -41,6 +41,12 @@ pub fn unstaged(paths: &[String]) -> Result<Vec<String>, String> {
     Ok(nul_separated(&run(&args)?))
 }
 
+// Every file a gate reaches, committed rather than changed: what `audit` reviews, where `staged` is what `attest` reviews.
+pub fn tracked(paths: &[String]) -> Result<Vec<String>, String> {
+    let args = with_pathspec(&["ls-files", "-z"], paths);
+    Ok(nul_separated(&run(&args)?))
+}
+
 // A literal pathspec matching nothing in the index is a typo; a glob is allowed to match nothing.
 pub fn unmatched_literals(paths: &[String]) -> Result<Vec<String>, String> {
     let mut bad = Vec::new();

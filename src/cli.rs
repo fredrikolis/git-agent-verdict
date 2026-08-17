@@ -6,6 +6,7 @@ pub const USAGE: &str = concat!(
     "                         (--doc <path> | --rule <text>)... --path <pathspec>...\n",
     "       git-agent-verdict attest --repo <abs path> [--intent <one line>]\n",
     "                                [--timeout <minutes, default 30; or 90s, 45m, 2h>]\n",
+    "       git-agent-verdict audit  --repo <abs path> [--timeout <minutes>]\n",
     "       git-agent-verdict reset --repo <abs path> <reason>\n",
     "       git-agent-verdict --reviewer-prompt <gate>\n",
     "       git-agent-verdict --require-version <major.minor>\n",
@@ -15,9 +16,15 @@ pub const USAGE: &str = concat!(
 // Undocumented on purpose, and in no usage line: the refusal below is the only place an agent meets it, which is the moment the reminder is worth anything.
 pub const BACKGROUND: &str = "--confirm-running-in-background-shell-with-long-timeout";
 
+// Undocumented for the same reason as BACKGROUND, and asked for separately: the background shell is a fact about how the command is being run, this is a statement about what the caller means to spend. An agent reaching for `audit` because `attest` refused is exactly the mistake it stops.
+pub const WHOLE: &str = "--confirm-reviewing-the-whole-repo-not-a-commit";
+
 // Verbs a dev agent types, as against a declaration a hook carries: mistyping one is not a repo whose wiring has gone stale, so the setup guide would be noise.
 pub fn agent_verb(args: &[String]) -> bool {
-    matches!(args.first().map(String::as_str), Some("attest" | "reset"))
+    matches!(
+        args.first().map(String::as_str),
+        Some("attest" | "audit" | "reset")
+    )
 }
 
 // Wide enough for one real change's aim, and narrow enough that two aims will not fit: the reviewer refuses a brief that argues, so this bounds the change rather than the prose.
@@ -73,6 +80,8 @@ pub enum Mode {
     // The repo comes first because nothing else means anything without it: the verb acts on the tree named here and never on the one the shell is standing in. The ceiling comes last because it is the one field with an answer when the author gives none.
     Attest(String, Option<String>, std::time::Duration),
     Reset(String, String),
+    // No intent, because there is no commit: an audit reviews the tree against the rubrics and lands nothing.
+    Audit(String, std::time::Duration),
     ReviewerPrompt(String),
     RequireVersion(String),
     RepoSetupGuide,
@@ -130,6 +139,7 @@ struct Parsed {
     repo: Option<String>,
     timeout: Option<String>,
     background: bool,
+    whole: bool,
     brief: Brief,
     docs: Vec<String>,
     rules: Vec<String>,
@@ -159,6 +169,7 @@ fn collect(args: impl Iterator<Item = String>) -> Result<Parsed, String> {
                 p.model = Some(args.next().ok_or("--model needs a model the agent knows")?)
             }
             BACKGROUND => p.background = true,
+            WHOLE => p.whole = true,
             "--simple" => p.brief.simple = true,
             "--override-prompt" => {
                 let path = args.next().ok_or("--override-prompt needs a path")?;
@@ -187,6 +198,7 @@ fn only(detail: &str, p: &Parsed, takes: &[&str]) -> Result<(), String> {
         ("--timeout", p.timeout.is_some()),
         ("--model", p.model.is_some()),
         (BACKGROUND, p.background),
+        (WHOLE, p.whole),
         ("--simple", p.brief.simple),
         ("--override-prompt", p.brief.prompt.is_some()),
         ("--doc", !p.docs.is_empty()),
@@ -276,6 +288,35 @@ fn attest(p: &Parsed) -> Result<Mode, String> {
     Ok(Mode::Attest(repo, Some(intent), ceiling))
 }
 
+// Said in full at the one moment it is worth reading: an agent that reached for this verb because attest refused it needs the difference between them, not a flag name.
+const NOT_A_COMMIT: &str = "audit reviews every file each gate reaches, not the staged diff. \
+One full review per gate, and it lands nothing.\n\nUse it after a rubric changed, to find what the \
+new wording condemns in code nobody is touching. Normal development is attested from the diff: that \
+is what `attest` is for, and it is what the hook demands at commit time.\n\nIf that is what you mean, \
+say so:\n\n  git agent-verdict audit --repo <abs path to the repo root> \\\n    \
+--confirm-reviewing-the-whole-repo-not-a-commit \\\n    \
+--confirm-running-in-background-shell-with-long-timeout";
+
+fn audit(p: &Parsed) -> Result<Mode, String> {
+    if !p.background {
+        return Err(FOREGROUND.to_string());
+    }
+    if !p.whole {
+        return Err(NOT_A_COMMIT.to_string());
+    }
+    let repo = target(p)?;
+    let ceiling = match &p.timeout {
+        Some(text) => ceiling(text)?,
+        None => REVIEW_CEILING,
+    };
+    only(
+        "audit takes --repo and --timeout only: what each gate reviews comes from the commit-msg hook, and there is no intent because there is no commit",
+        p,
+        &["--repo", "--timeout", "<positional>", BACKGROUND, WHOLE],
+    )?;
+    Ok(Mode::Audit(repo, ceiling))
+}
+
 // The reason is the whole point of the verb, so it is required rather than defaulted: an unexplained reset is the one this exists to make visible.
 fn reset(p: &Parsed) -> Result<Mode, String> {
     let repo = target(p)?;
@@ -297,6 +338,7 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Mode, String> {
     let p = collect(args)?;
     match p.positional.first().map(String::as_str) {
         Some("attest") => return attest(&p),
+        Some("audit") => return audit(&p),
         Some("reset") => return reset(&p),
         _ => {}
     }

@@ -8,6 +8,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 pub const BACKGROUND: &str = "--confirm-running-in-background-shell-with-long-timeout";
+pub const WHOLE: &str = "--confirm-reviewing-the-whole-repo-not-a-commit";
 pub const BIN: &str = env!("CARGO_BIN_EXE_git-agent-verdict");
 static SEQ: AtomicU32 = AtomicU32::new(0);
 
@@ -168,6 +169,12 @@ impl Repo {
     pub fn attest(&self, intent: &str) -> Run {
         let root = self.root();
         self.capture(&["attest", "--repo", &root, "--intent", intent, BACKGROUND])
+    }
+
+    // Both confirmations, because the verb demands both: a long-running shell, and that the whole repo is meant.
+    pub fn audit(&self) -> Run {
+        let root = self.root();
+        self.capture(&["audit", "--repo", &root, BACKGROUND, WHOLE])
     }
 
     pub fn again(&self) -> Run {

@@ -118,7 +118,7 @@ fn review(
     round: &Round,
     ceiling: std::time::Duration,
 ) -> Result<(Vec<Verdict>, String), String> {
-    let system = crate::brief::system(declaration)?;
+    let system = crate::brief::system(declaration, crate::brief::Reach::Diff)?;
     let prompt = match round.opening {
         Opening::First => crate::brief::opening(intent),
         Opening::Again => crate::brief::continuing(),

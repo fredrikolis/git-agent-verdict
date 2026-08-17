@@ -72,13 +72,45 @@ fn asked_of(simple: bool) -> &'static str {
     }
 }
 
+// What a round is asked to look at. A commit's diff is the whole of normal development; the tree as it stands is what a rubric that just changed has never been read against, and no diff will ever show it.
+#[derive(Clone, Copy)]
+pub enum Reach {
+    Diff,
+    Whole,
+}
+
+impl Reach {
+    fn command(self, paths: &[String]) -> String {
+        match self {
+            Reach::Diff => format!("git diff --cached -- {}", quoted(paths)),
+            Reach::Whole => format!("git ls-files -- {}", quoted(paths)),
+        }
+    }
+
+    // What the reviewer is judging, named where the task step points at it.
+    fn subject(self) -> &'static str {
+        match self {
+            Reach::Diff => "that diff",
+            Reach::Whole => "every file it lists",
+        }
+    }
+
+    // How far past what it was handed the reviewer must look. A tree has no edited lines to stop at, and a reviewer told to look past them anyway goes hunting for a change nobody made.
+    fn rule(self) -> &'static str {
+        match self {
+            Reach::Diff => "Judge the diff and what it affects, not only the edited lines.",
+            Reach::Whole => "Judge each file as it stands. Nothing here is a change, and there is no diff to read.",
+        }
+    }
+}
+
 // Quoted for the shell the reviewer types it into: a pathspec is written to be globbed by git, not by that shell.
-fn scope(paths: &[String]) -> String {
+fn quoted(paths: &[String]) -> String {
     let quoted: Vec<String> = paths
         .iter()
         .map(|p| format!("'{}'", p.replace('\'', r"'\''")))
         .collect();
-    format!("git diff --cached -- {}", quoted.join(" "))
+    quoted.join(" ")
 }
 
 // Read in, not pointed at: a path is something a reviewer may skim or skip, and re-reads every round. Content sits apart from process so neither reads as a footnote to the other.
@@ -102,7 +134,7 @@ fn criteria(declaration: &Declaration) -> Result<String, String> {
 }
 
 // Everything that does not change between rounds, or between commits: a runner that hands this to a system prompt pays for it once and reads it from cache after.
-pub fn system(declaration: &Declaration) -> Result<String, String> {
+pub fn system(declaration: &Declaration, reach: Reach) -> Result<String, String> {
     let template = match &declaration.brief.prompt {
         Some(path) => {
             std::fs::read_to_string(path).map_err(|e| format!("--override-prompt {path}: {e}"))?
@@ -117,7 +149,9 @@ pub fn system(declaration: &Declaration) -> Result<String, String> {
     Ok(template
         .replace("{{gate}}", &declaration.gate)
         .replace("{{criteria}}", &criteria(declaration)?)
-        .replace("{{scope}}", &scope(&declaration.paths))
+        .replace("{{scope}}", &reach.command(&declaration.paths))
+        .replace("{{subject}}", reach.subject())
+        .replace("{{reach}}", reach.rule())
         .replace("{{ladder}}", ladder)
         .replace("{{marker}}", MARKER)
         .replace("{{shape}}", asked_of(declaration.brief.simple)))
@@ -128,6 +162,13 @@ pub fn opening(intent: &str) -> String {
     format!(
         "<diff-intent>{intent}</diff-intent>\n\nExecute the review per the instructions above.\n"
     )
+}
+
+// No aim, because there is no change to state one for: a tree is reviewed against the rubric as it now reads, and an intent here would be a sentence about a commit nobody is writing.
+pub fn sweeping() -> String {
+    "A rubric this gate judges by has changed. Review the repository as it now stands against it.\n\
+     There is no commit and no diff. Report what the rubric names, and close with your verdict line.\n"
+        .to_string()
 }
 
 pub fn continuing() -> String {

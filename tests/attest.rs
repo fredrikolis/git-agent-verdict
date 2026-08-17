@@ -716,3 +716,81 @@ fn an_agent_that_leaves_its_pipe_held_open_does_not_hang_the_run() {
     );
     assert_eq!(run.code, 0, "{}", run.err);
 }
+
+// The verb exists because a rubric that changed condemns code no commit is touching, and no diff will ever show it.
+#[test]
+fn audit_reviews_every_tracked_file_a_gate_reaches() {
+    let repo = Repo::new();
+    let recording = concat!(
+        r#"cat > prompts; cp "$AGENT_VERDICT_SYSTEM" system-seen; "#,
+        r#"echo "VERDICT: reviewer=fake session=s-1 major=0 moderate=2 minor=1""#
+    );
+    repo.declare_runner(recording, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    let run = repo.audit();
+    assert_eq!(run.code, 0, "{}", run.err);
+    // The tree, not the diff: what the reviewer is told to run says which.
+    let brief = repo.read("system-seen");
+    assert!(brief.contains("git ls-files -- '.'"), "{brief}");
+    assert!(!brief.contains("git diff --cached"), "{brief}");
+    assert!(brief.contains("every file it lists"), "{brief}");
+    // No aim, because there is no commit to state one for.
+    assert!(
+        repo.prompts().contains("no commit and no diff"),
+        "{}",
+        repo.prompts()
+    );
+    assert!(
+        run.out.contains("standards: major=0 moderate=2 minor=1"),
+        "{}",
+        run.out
+    );
+}
+
+// An audit lands nothing: a trailer attests one commit, and there is no commit here.
+#[test]
+fn audit_records_nothing_and_commits_nothing() {
+    let repo = Repo::new();
+    repo.declare(CLEAN, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    assert_eq!(repo.audit().code, 0);
+    assert!(!repo.committed(), "audit committed");
+    // The diary is untouched, so the next attest still reviews the gate itself.
+    let attested = repo.attest(AIM);
+    assert!(attested.out.contains("standards:"), "{}", attested.out);
+}
+
+// MAJOR is still MAJOR when nothing is being committed: the tree does not meet the rubric, and the run says so in its status.
+#[test]
+fn a_major_found_by_audit_is_reported_in_the_exit_status() {
+    let repo = Repo::new();
+    repo.declare(BLOCKER, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    let run = repo.audit();
+    assert_eq!(run.code, 1, "{}", run.err);
+    assert!(run.err.contains("including MAJOR"), "{}", run.err);
+}
+
+// The flag is the whole guard: an agent that reached for this verb because attest refused it gets told the difference, not the flag name.
+#[test]
+fn audit_without_the_whole_repo_confirmation_says_what_it_would_have_done() {
+    let repo = Repo::new();
+    repo.declare(CLEAN, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    let root = repo.root();
+    let run = repo.capture(&["audit", "--repo", &root, common::BACKGROUND]);
+    assert_eq!(run.code, 2, "{}", run.err);
+    assert!(run.err.contains("not the staged diff"), "{}", run.err);
+    assert!(run.err.contains("attest"), "{}", run.err);
+    assert!(!repo.read("rounds").contains('1'), "it reviewed anyway");
+}
+
+// Undocumented on purpose, like the background one: the refusal is where it is met.
+#[test]
+fn the_whole_repo_flag_is_in_no_usage_line() {
+    let repo = Repo::new();
+    let help = repo.capture(&["--help"]);
+    assert!(!help.out.contains("--confirm-reviewing"), "{}", help.out);
+    let guide = repo.capture(&["--repo-setup-guide"]);
+    assert!(!guide.out.contains("--confirm-reviewing"), "{}", guide.out);
+}

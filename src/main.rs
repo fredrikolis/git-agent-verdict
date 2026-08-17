@@ -2,6 +2,7 @@
 
 mod agent;
 mod attest;
+mod audit;
 mod brief;
 mod cli;
 mod declarations;
@@ -62,7 +63,7 @@ fn require_version(want: &str) -> Result<bool, String> {
 fn reviewer_prompt(want: &str) -> Result<bool, String> {
     let hook = declarations::read()?;
     let declaration = declarations::find(&hook, want)?;
-    println!("{}", brief::system(declaration)?);
+    println!("{}", brief::system(declaration, brief::Reach::Diff)?);
     println!("──── and on stdin, opening a round ────\n");
     println!(
         "{}",
@@ -136,6 +137,14 @@ fn main() -> ExitCode {
             enter(repo).and_then(|()| {
                 let _held = lock::take()?;
                 attest::run(intent.as_deref(), *ceiling)
+            }),
+        ),
+        // Held like attest's: one review at a time in a repo, whichever verb is paying for it.
+        Mode::Audit(repo, ceiling) => (
+            "audit",
+            enter(repo).and_then(|()| {
+                let _held = lock::take()?;
+                audit::run(*ceiling)
             }),
         ),
         Mode::Reset(repo, reason) => (

@@ -140,6 +140,22 @@ assumption in the command line, where the transcript records it. `attest` also r
 index and the working tree disagree on any file a gate reviews — the reviewer opens those files, and
 the commit carries the index.
 
+## Auditing after a rubric changes
+
+`attest` reviews the staged diff. When a rubric itself changes, what it now condemns is mostly in
+code nobody is touching, and no diff will ever show it. `audit` reviews the tree instead:
+
+```console
+$ git agent-verdict audit --repo /home/me/src/my-repo \
+    --confirm-reviewing-the-whole-repo-not-a-commit \
+    --confirm-running-in-background-shell-with-long-timeout
+```
+
+One full review per gate, on every tracked file that gate's pathspec reaches. It records nothing and
+commits nothing: a trailer attests one commit, and there is no commit here. What it produces is the
+report, which the author acts on in commits attested from their own diffs. Exit 1 if any gate
+reported a MAJOR, 2 if a reviewer failed.
+
 **Nothing is handed to the agent to forward.** The brief goes from the tool to the reviewer, and the
 counts come back the same way. The agent supplies one thing — `--intent`.
 

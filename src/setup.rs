@@ -36,6 +36,14 @@ const GUIDE: &str = r#"WIRING A REPO — git-agent-verdict
      git agent-verdict "$1" prose-gate --simple --model haiku \
        --doc "$KB/writing-style.md" --path "*.md"
 
+     # A rule longer than a line does not belong in argv. One argument is capped (128 KiB on
+     # Linux), so --rule "$(generate-rubric)" fails the exec once the text grows, and a rule
+     # carrying a newline splits into two in the gate listing, which is line-based.
+     # Redirect the same command into a file and point --doc at it. No cap, and no quoting:
+     rubric="$(git rev-parse --git-path agent-verdict-generated.md)"
+     generate-rubric > "$rubric"
+     git agent-verdict "$1" generated-gate --doc "$rubric" --path .
+
      # Line order is review order: a later gate is never judged against what an earlier one is
      # still changing. Gate names are repo-chosen labels, and reach the trailer as Reviewed-<name>.
      # Staging a rubric is refused, whichever gate declares it: what the repo gates by is

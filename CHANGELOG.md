@@ -4,6 +4,19 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [1.9.0] - 2026-08-17
+
+### Added
+- `audit` reviews the repository as it stands against every gate, for after a rubric changed: what
+  new wording condemns is mostly in code no commit is touching, and no diff will ever show it. One
+  full review per gate over every tracked file the gate reaches. It records nothing and commits
+  nothing, because a trailer attests one commit and there is no commit here. Exit 1 on a MAJOR.
+  It demands `--confirm-reviewing-the-whole-repo-not-a-commit` alongside the background-shell
+  assertion, and the refusal without it states the difference from `attest` rather than the flag.
+- The setup guide shows how to hand a gate a rubric too long for argv: one argument is capped at
+  128 KiB on Linux, so `--rule "$(generate-rubric)"` fails the exec once the text grows, and a rule
+  carrying a newline splits in two in the line-based gate listing. Redirect into a file, `--doc` it.
+
 ## [1.8.2] - 2026-08-17
 
 ### Changed
