@@ -156,6 +156,19 @@ fn main() -> ExitCode {
         ),
         Mode::ReviewerPrompt(gate) => ("reviewer-prompt", reviewer_prompt(gate)),
         Mode::RequireVersion(want) => ("require-version", require_version(want)),
+        // The whole text on stdout, because a gate declaring one is judged by every word of it and an author deciding whether to declare it has no other way to read it.
+        Mode::Standards(name) => ("standards", {
+            match name {
+                Some(name) => println!("{}", brief::shipped(name).unwrap_or_default().trim_end()),
+                None => {
+                    println!("{}", brief::shipped_listing());
+                    println!(
+                        "\nDeclare one on a gate with --standard <name>. Read one in full with --standards <name>."
+                    );
+                }
+            }
+            Ok(true)
+        }),
         Mode::RepoSetupGuide => ("repo-setup-guide", {
             println!("{}", setup::guide());
             Ok(true)

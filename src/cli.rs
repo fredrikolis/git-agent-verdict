@@ -3,11 +3,13 @@
 pub const USAGE: &str = concat!(
     "usage: git-agent-verdict <msg-file> <gate> [--simple] [--model <name>]\n",
     "                         [--override-prompt <path>]\n",
-    "                         (--doc <path> | --rule <text>)... --path <pathspec>...\n",
+    "                         (--standard <name> | --doc <path> | --rule <text>)...\n",
+    "                         --path <pathspec>...\n",
     "       git-agent-verdict attest --repo <abs path> [--intent <one line>]\n",
     "                                [--timeout <minutes, default 30; or 90s, 45m, 2h>]\n",
     "       git-agent-verdict audit  --repo <abs path> [--timeout <minutes>]\n",
     "       git-agent-verdict reset --repo <abs path> <reason>\n",
+    "       git-agent-verdict --standards [<name>]\n",
     "       git-agent-verdict --reviewer-prompt <gate>\n",
     "       git-agent-verdict --require-version <major.minor>\n",
     "       git-agent-verdict --repo-setup-guide"
@@ -69,6 +71,7 @@ pub struct Invocation {
     pub model: Option<String>,
     pub msg_file: String,
     pub gate: String,
+    pub standards: Vec<String>,
     pub docs: Vec<String>,
     pub rules: Vec<String>,
     pub paths: Vec<String>,
@@ -85,6 +88,8 @@ pub enum Mode {
     ReviewerPrompt(String),
     RequireVersion(String),
     RepoSetupGuide,
+    // No name lists them; a name prints that one whole. A gate declares a standard it cannot read, so there has to be a way to read it.
+    Standards(Option<String>),
 }
 
 // Resolved once, here: the reviewer block promises absolute paths, and a path that does not resolve exempts itself in silence — a doc from its gate, an override from the template it replaces.
@@ -135,12 +140,14 @@ struct Parsed {
     reviewer_prompt: Option<String>,
     require_version: Option<String>,
     setup_guide: bool,
+    list_standards: bool,
     intent: Option<String>,
     repo: Option<String>,
     timeout: Option<String>,
     background: bool,
     whole: bool,
     brief: Brief,
+    standards: Vec<String>,
     docs: Vec<String>,
     rules: Vec<String>,
     paths: Vec<String>,
@@ -154,6 +161,7 @@ fn collect(args: impl Iterator<Item = String>) -> Result<Parsed, String> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--repo-setup-guide" => p.setup_guide = true,
+            "--standards" => p.list_standards = true,
             "--reviewer-prompt" => {
                 p.reviewer_prompt = Some(args.next().ok_or("--reviewer-prompt needs a gate name")?);
             }
@@ -175,6 +183,16 @@ fn collect(args: impl Iterator<Item = String>) -> Result<Parsed, String> {
                 let path = args.next().ok_or("--override-prompt needs a path")?;
                 p.brief.prompt = Some(canonical("--override-prompt", &path)?);
             }
+            // Checked here rather than at brief time: a gate declaring a name this build does not ship should fail the hook that declares it, not the review it was going to pay for.
+            "--standard" => {
+                let name = args.next().ok_or_else(|| {
+                    format!("--standard needs one of: {}", crate::brief::shipped_names())
+                })?;
+                if crate::brief::shipped(&name).is_none() {
+                    return Err(crate::brief::unknown_standard(&name));
+                }
+                p.standards.push(name);
+            }
             "--doc" => p.docs.push(args.next().ok_or("--doc needs a path")?),
             "--rule" => p
                 .rules
@@ -191,6 +209,7 @@ fn collect(args: impl Iterator<Item = String>) -> Result<Parsed, String> {
 fn only(detail: &str, p: &Parsed, takes: &[&str]) -> Result<(), String> {
     let given = [
         ("--repo-setup-guide", p.setup_guide),
+        ("--standards", p.list_standards),
         ("--reviewer-prompt", p.reviewer_prompt.is_some()),
         ("--require-version", p.require_version.is_some()),
         ("--intent", p.intent.is_some()),
@@ -201,6 +220,7 @@ fn only(detail: &str, p: &Parsed, takes: &[&str]) -> Result<(), String> {
         (WHOLE, p.whole),
         ("--simple", p.brief.simple),
         ("--override-prompt", p.brief.prompt.is_some()),
+        ("--standard", !p.standards.is_empty()),
         ("--doc", !p.docs.is_empty()),
         ("--rule", !p.rules.is_empty()),
         ("--path", !p.paths.is_empty()),
@@ -365,6 +385,21 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Mode, String> {
         Some("reset") => return reset(&p),
         _ => {}
     }
+    // Answered from the binary alone, outside any repo: what this build carries is a fact about the binary, and a caller asking has not necessarily got a repo yet.
+    if p.list_standards {
+        only(
+            "--standards takes a standard's name, or nothing at all",
+            &p,
+            &["--standards", "<positional>"],
+        )?;
+        let named = p.positional.first().cloned();
+        if let Some(name) = &named {
+            if crate::brief::shipped(name).is_none() {
+                return Err(crate::brief::unknown_standard(name));
+            }
+        }
+        return Ok(Mode::Standards(named));
+    }
     // Answered from nothing at all: it is the one mode that works outside a repo, which is where someone wiring one up starts.
     if p.setup_guide {
         only(
@@ -389,8 +424,11 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Mode, String> {
         return Ok(Mode::ReviewerPrompt(gate));
     }
     // A gate judging against nothing is a gate that has silently stopped judging, so an empty measure is an error rather than a vacuous pass.
-    if p.docs.is_empty() && p.rules.is_empty() {
-        return Err("a gate needs at least one --doc or --rule to judge against".to_string());
+    if p.docs.is_empty() && p.rules.is_empty() && p.standards.is_empty() {
+        return Err(format!(
+            "a gate needs at least one --standard, --doc or --rule to judge against.\nThis build ships: {}\nList them with: git agent-verdict --standards",
+            crate::brief::shipped_names()
+        ));
     }
     let [msg_file, gate] = <[String; 2]>::try_from(p.positional).map_err(|got| {
         format!(
@@ -411,6 +449,7 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Mode, String> {
         model: p.model.clone(),
         msg_file,
         gate: gate_name(&gate)?,
+        standards: p.standards,
         docs,
         rules: p.rules,
         paths: p.paths,

@@ -48,8 +48,30 @@ does not know. An annotation check and a correctness review are not worth the sa
 is which is the repo's call. Omitted, the agent picks. A model the agent will not answer for fails
 the run and names the gate that declared it: that is the hook's wiring, not the commit's.
 
+`--standard` names a rubric shipped inside the binary, so a repo can gate on a general measure
+without hosting or copying one:
+
+```bash
+git agent-verdict "$1" core --model opus --standard programming --standard testing --path .
+```
+
+| Name | What it judges |
+| ---- | -------------- |
+| `programming` | Language-agnostic design principles: data flow, boundaries, contracts, canonical form. |
+| `testing` | Which assertions earn a committed test, and which are scratch. |
+| `cli` | The command-line surface an agent invokes: flags, streams, exit codes, envelopes. |
+| `frontend` | Component architecture, framework-neutral: data flow, boundaries, lifecycle, state. |
+| `agent-communication` | Prose an agent acts on: findings not explanations, dense and scannable. |
+| `human-communication` | Prose a person reads: a README, a guide, an error message. |
+
+`git agent-verdict --standards` lists them with what each one judges, and `--standards <name>`
+prints one in full. They live as Markdown in [`standards/`](standards/) and the build bundles the
+folder in, so adding one is a file, never a code change. They are read from the binary, never fetched, so a review does not depend on a network and cannot
+change under a repo between two runs of the same commit. They move when the tool moves, which the
+hook already pins with `--require-version`.
+
 `--rule` states a measure inline where a whole document would be more than the check is worth. A
-gate needs at least one `--doc` or `--rule`, and carries both where it wants both.
+gate needs at least one `--standard`, `--doc` or `--rule`, and carries any mix of them.
 
 Who reviews is **host** configuration, not the repo's — maintainers of one repo do not share a
 machine, a budget or a preferred agent:

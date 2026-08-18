@@ -21,6 +21,13 @@ const GUIDE: &str = r#"WIRING A REPO — git-agent-verdict
      # The compatibility line these flags are written against.
      git agent-verdict --require-version {{line}}
 
+     # --standard names a rubric shipped inside this binary, so a repo gates on a general measure
+     # without hosting or copying one. They move only when the tool does, which the line above pins.
+     # `git agent-verdict --standards` lists what this build carries and what each one judges;
+     # `--standards <name>` prints one in full. They are text inside the binary, not files in the repo.
+     git agent-verdict "$1" core --model opus \
+       --standard programming --standard testing --path .
+
      # Graded, and blocks on major=. A gate may be judged against several rubrics, and --rule
      # states one inline where a whole document would be more than the check is worth.
      # --model is passed to the agent as given and never checked here: what a gate is worth
@@ -31,7 +38,7 @@ const GUIDE: &str = r#"WIRING A REPO — git-agent-verdict
        --path .
 
      # Advisory: same ladder, no MAJOR rung, never blocks. The shell expands $KB, so a rubric may live
-     # outside the repo, where nothing can stage it. A gate needs at least one --doc or --rule.
+     # outside the repo, where nothing can stage it. A gate needs one --standard, --doc or --rule.
      # `*.md` is a git pathspec, so it matches at any depth: this gate reads docs/ too.
      git agent-verdict "$1" prose-gate --simple --model haiku \
        --doc "$KB/writing-style.md" --path "*.md"

@@ -8,6 +8,7 @@ const LIST_ENV: &str = "GIT_AGENT_VERDICT_LIST";
 
 pub struct Declaration {
     pub gate: String,
+    pub standards: Vec<String>,
     pub docs: Vec<String>,
     pub rules: Vec<String>,
     pub paths: Vec<String>,
@@ -32,6 +33,7 @@ pub fn emit_gate(inv: &Invocation) {
     if let Some(path) = &inv.brief.prompt {
         fields.push(format!("prompt={path}"));
     }
+    fields.extend(inv.standards.iter().map(|s| format!("standard={s}")));
     fields.extend(inv.docs.iter().map(|d| format!("doc={d}")));
     fields.extend(inv.rules.iter().map(|r| format!("rule={r}")));
     fields.extend(inv.paths.iter().map(|p| format!("path={p}")));
@@ -41,6 +43,7 @@ pub fn emit_gate(inv: &Invocation) {
 fn read_gate(gate: &str, fields: std::str::Split<'_, char>) -> Option<Declaration> {
     let mut declaration = Declaration {
         gate: gate.to_string(),
+        standards: Vec::new(),
         docs: Vec::new(),
         rules: Vec::new(),
         paths: Vec::new(),
@@ -48,7 +51,9 @@ fn read_gate(gate: &str, fields: std::str::Split<'_, char>) -> Option<Declaratio
         brief: Brief::default(),
     };
     for field in fields {
-        if let Some(doc) = field.strip_prefix("doc=") {
+        if let Some(name) = field.strip_prefix("standard=") {
+            declaration.standards.push(name.to_string());
+        } else if let Some(doc) = field.strip_prefix("doc=") {
             declaration.docs.push(doc.to_string());
         } else if let Some(text) = field.strip_prefix("rule=") {
             declaration.rules.push(text.to_string());
@@ -63,7 +68,10 @@ fn read_gate(gate: &str, fields: std::str::Split<'_, char>) -> Option<Declaratio
         }
     }
     // A line with no measure is not a gate: the hook's own version check and any command it runs beside them print nothing here.
-    if declaration.docs.is_empty() && declaration.rules.is_empty() {
+    if declaration.docs.is_empty()
+        && declaration.rules.is_empty()
+        && declaration.standards.is_empty()
+    {
         return None;
     }
     Some(declaration)

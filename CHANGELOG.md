@@ -4,6 +4,20 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [1.12.0] - 2026-08-17
+
+### Added
+- `--standard <name>` declares a rubric shipped inside the binary, so a repo gates on a general
+  measure without hosting or copying one. Six ship: `programming`, `testing`, `cli`, `frontend`,
+  `agent-communication`, `human-communication`. They are read from the binary, never fetched, so a
+  review needs no network and a rubric cannot change under a repo between two runs of the same
+  commit. They move when the tool moves, which the hook already pins with `--require-version`.
+- `--standards` lists them, each described by its own first-line annotation, and `--standards
+  <name>` prints one in full. A gate declares a standard it cannot open, so there has to be a way
+  to read one before declaring it.
+- The standards live as Markdown under `standards/`, and the build generates the bundled list from
+  that folder. Adding one is a file; no Rust changes.
+
 ## [1.11.0] - 2026-08-17
 
 ### Fixed

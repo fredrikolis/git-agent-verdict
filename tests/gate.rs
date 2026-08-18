@@ -445,3 +445,62 @@ fn an_agent_coauthor_line_is_dropped_but_a_human_one_is_kept() {
     assert!(rewritten.contains("claude@example.com"), "{rewritten}");
     assert!(rewritten.contains("Reviewed-standards:"), "{rewritten}");
 }
+
+// Shipped in the binary, so a repo gets the measure without hosting it, and it moves only when the tool does — which the hook already pins with --require-version.
+#[test]
+fn a_shipped_standard_reaches_the_brief_without_a_file_in_the_repo() {
+    let repo = Repo::new();
+    repo.declare(
+        "VERDICT: reviewer=fake session=s-1 major=0 moderate=0 minor=0",
+        &[r#""$1" std --standard programming --path ."#],
+    );
+    repo.stage(&["src.rs"]);
+    let run = repo.capture(&["--reviewer-prompt", "std"]);
+    assert_eq!(run.code, 0, "{}", run.err);
+    // Inlined like any other document: the reviewer is judging text it has been handed, and where the text came from is not its business.
+    assert!(
+        run.out.contains("<document title=\"programming\">"),
+        "{}",
+        run.out
+    );
+    assert!(run.out.contains("AUTO-REJECT"), "{}", run.out);
+}
+
+// A name this build does not carry fails the hook that declares it, not the review it was about to pay for.
+#[test]
+fn an_unknown_standard_is_refused_with_the_list_of_shipped_ones() {
+    let repo = Repo::new();
+    let (code, said) = repo.run("subject", &["std", "--standard", "nonesuch", "--path", "."]);
+    assert_eq!(code, 2, "{said}");
+    assert!(said.contains("this build ships"), "{said}");
+    assert!(said.contains("programming"), "{said}");
+}
+
+// A standard is a measure like any other, so it satisfies the demand for one.
+#[test]
+fn a_standard_alone_is_enough_to_declare_a_gate() {
+    let repo = Repo::new();
+    repo.stage(&["src.rs"]);
+    let (code, said) = repo.run("subject", &["std", "--standard", "testing", "--path", "."]);
+    assert_ne!(code, 2, "{said}");
+    assert!(!said.contains("at least one"), "{said}");
+}
+
+// A gate declares a standard it cannot open, so there has to be a way to read one. The listing describes each from its own first-line annotation rather than a second description that goes stale.
+#[test]
+fn the_shipped_standards_can_be_listed_and_read() {
+    let repo = Repo::new();
+    let listed = repo.capture(&["--standards"]);
+    assert_eq!(listed.code, 0, "{}", listed.err);
+    assert!(listed.out.contains("programming"), "{}", listed.out);
+    assert!(listed.out.contains("human-communication"), "{}", listed.out);
+    assert!(listed.out.contains("Concern:"), "{}", listed.out);
+
+    let read = repo.capture(&["--standards", "testing"]);
+    assert_eq!(read.code, 0, "{}", read.err);
+    assert!(read.out.len() > 2000, "{}", read.out.len());
+
+    let unknown = repo.capture(&["--standards", "nonesuch"]);
+    assert_eq!(unknown.code, 2, "{}", unknown.err);
+    assert!(unknown.err.contains("this build ships"), "{}", unknown.err);
+}

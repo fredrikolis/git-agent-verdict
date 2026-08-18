@@ -6,6 +6,42 @@ use crate::trailer::{ADVISORY_SHAPE, COUNTS_SHAPE};
 
 const TEMPLATE: &str = include_str!("prompt.md");
 
+// Shipped in the binary rather than fetched: a rubric that arrives over the network can change between two runs of the same commit, and then a trailer attests a measure nobody can reconstruct. Carried here, they are pinned by whatever pins the tool — the hook's own --require-version line — so they move when a maintainer moves them and never on their own. The list itself is generated at build time from standards/*.md, so the folder is the only place a standard is declared; see build.rs.
+include!(concat!(env!("OUT_DIR"), "/standards.rs"));
+
+pub fn shipped(name: &str) -> Option<&'static str> {
+    SHIPPED
+        .iter()
+        .find(|(known, _)| *known == name)
+        .map(|(_, text)| *text)
+}
+
+// What each one is for, taken from its own first line rather than restated here: a second description is one that goes stale, and the annotation is already the file's statement of its concern.
+pub fn shipped_listing() -> String {
+    SHIPPED
+        .iter()
+        .map(|(name, text)| {
+            let annotation = text
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .trim_start_matches("<!--")
+                .trim_end_matches("-->")
+                .trim();
+            format!("{name}\n    {annotation}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+pub fn shipped_names() -> String {
+    SHIPPED
+        .iter()
+        .map(|(name, _)| *name)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 // The whole of what --simple changes: an advisory gate has no MAJOR rung, so the rung is absent rather than shown and annotated away. The tool reports its zero, and the trailer keeps one shape everywhere.
 const LADDER: &str = "MAJOR — blocks the commit, and is reviewed again.
   The work is wrong, or has a severe flaw. An incremental fix will not reach the right answer.
@@ -113,9 +149,22 @@ fn quoted(paths: &[String]) -> String {
     quoted.join(" ")
 }
 
+// Named here as well as at the flag: a hook is read back through the listing, so a name this build does not carry can reach a brief without ever passing the parser.
+pub fn unknown_standard(name: &str) -> String {
+    format!("--standard {name}: this build ships {}", shipped_names())
+}
+
 // Read in, not pointed at: a path is something a reviewer may skim or skip, and re-reads every round. Content sits apart from process so neither reads as a footnote to the other.
 fn criteria(declaration: &Declaration) -> Result<String, String> {
     let mut out = String::new();
+    // The general measure before the repo's own: a standard shipped here is what every repo using this tool is judged by, and the repo's documents narrow it.
+    for name in &declaration.standards {
+        let text = shipped(name).ok_or_else(|| unknown_standard(name))?;
+        out.push_str(&format!(
+            "<document title=\"{name}\">\n{}\n</document>\n",
+            text.trim_end()
+        ));
+    }
     for doc in &declaration.docs {
         let text = std::fs::read_to_string(doc).map_err(|e| format!("--doc {doc}: {e}"))?;
         let title = std::path::Path::new(doc)
