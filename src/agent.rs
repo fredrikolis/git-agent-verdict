@@ -2,7 +2,7 @@
 
 use crate::git;
 use std::io::{Read, Write};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 // What a run gives back. The model and the session are read from the agent rather than asked of it: one it would have to guess at, the other it cannot know. Why it stopped comes back too, unused until an answer turns out to carry no verdict — which is the moment it says whether the reviewer was cut off or simply ignored its brief.
@@ -89,16 +89,6 @@ fn claude_model(role: Role, asked: Option<&str>) -> Option<&str> {
     }
 }
 
-// Judging one line of text has nothing to think about for half an hour, and the ceiling the author set is for the review they are paying for. Which question deserves which patience is knowledge about this agent, so it lives here beside the model.
-const JUDGE_CEILING: Duration = Duration::from_secs(5 * 60);
-
-fn claude_ceiling(role: Role, asked: Duration) -> Duration {
-    match role {
-        Role::Review => asked,
-        Role::JudgeIntent => JUDGE_CEILING,
-    }
-}
-
 // Chosen here and handed to the agent, rather than read back out of its answer. The two are the same identifier and a world apart in when they are known: read back, it arrives in the final answer, which is the one thing a run that crashed, hung or was killed never produced — so the id would be available in exactly the cases with nothing to use it for. Assigned first, it is known before anything can go wrong, and the transcript it names can be pointed at when something does.
 fn assigned() -> String {
     let mut bytes = [0u8; 16];
@@ -153,16 +143,7 @@ fn claude(
     let mode = if terms.read_only { "plan" } else { "dontAsk" };
     command.args(["--permission-mode", mode]);
     let told = |detail: String| with_transcript(&detail, session.id());
-    // Narrated only for a review: the judge is one question answered in seconds, and nobody is waiting on it for signs of life.
-    let narrate = matches!(role, Role::Review);
-    let said = piped(
-        command,
-        prompt,
-        claude_ceiling(role, terms.ceiling),
-        narrate,
-        session.id(),
-    )
-    .map_err(told)?;
+    let said = piped(command, prompt, terms.ceiling, session.id()).map_err(told)?;
     let _ = std::fs::remove_file(&file);
     read_claude(&said).map_err(told)
 }
@@ -172,9 +153,6 @@ struct Said {
     out: String,
     err: String,
 }
-
-// Long enough that the wait costs nothing against a ceiling counted in minutes, short enough that the kill lands while the shell that asked for it is still there to read the reason.
-const POLL: Duration = Duration::from_millis(200);
 
 // Far enough apart that a long review is a handful of lines, close enough that a killed one is placed to the minute. Against a ceiling short enough that a minute would pass in silence, it is a quarter of the ceiling instead: the point is that the wait is accounted for, not that it is accounted for every sixty seconds.
 const HEARTBEAT: Duration = Duration::from_secs(60);
@@ -197,21 +175,24 @@ fn clipped(text: &str) -> String {
 type Seen = std::sync::Arc<std::sync::Mutex<Vec<u8>>>;
 
 // Drained from their own threads, because both pipes are bounded: an agent that fills either one blocks there until a read this side cannot reach while it waits for the process to exit. Into a buffer shared with this side rather than returned at the end, so what has arrived can be read without waiting for the end to come — a killed agent's pipe is held open by whatever it spawned, and a timeout that waits for that bounds nothing.
-fn drain(pipe: Option<impl Read + Send + 'static>) -> (std::thread::JoinHandle<()>, Seen) {
+fn drain(pipe: Option<impl Read + Send + 'static>) -> (std::sync::mpsc::Receiver<()>, Seen) {
     let seen: Seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let filling = std::sync::Arc::clone(&seen);
-    let reader = std::thread::spawn(move || {
-        let Some(mut pipe) = pipe else { return };
-        let mut chunk = [0u8; 8192];
-        // Chunked, and the lock taken only to append: held across the read it would be a lock on the agent's silence.
-        while let Ok(n) = pipe.read(&mut chunk) {
-            if n == 0 {
-                return;
+    let (done, drained) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        if let Some(mut pipe) = pipe {
+            let mut chunk = [0u8; 8192];
+            // Chunked, and the lock taken only to append: held across the read it would be a lock on the agent's silence.
+            while let Ok(n) = pipe.read(&mut chunk) {
+                if n == 0 {
+                    break;
+                }
+                hold(&filling).extend_from_slice(&chunk[..n]);
             }
-            hold(&filling).extend_from_slice(&chunk[..n]);
         }
+        let _ = done.send(());
     });
-    (reader, seen)
+    (drained, seen)
 }
 
 // A reader thread that panicked mid-append leaves what it had; nothing here is worth losing a diagnosis over.
@@ -222,11 +203,8 @@ fn hold(seen: &Seen) -> std::sync::MutexGuard<'_, Vec<u8>> {
 // Long enough that draining an answer already at EOF finishes inside it many times over, short enough that a pipe nothing will ever close is not mistaken for one still filling.
 const SETTLING: Duration = Duration::from_secs(5);
 
-fn settling(readers: &[std::thread::JoinHandle<()>]) {
-    let until = Instant::now() + SETTLING;
-    while Instant::now() < until && readers.iter().any(|r| !r.is_finished()) {
-        std::thread::sleep(POLL);
-    }
+fn settled(drained: &std::sync::mpsc::Receiver<()>, by: Instant) {
+    let _ = drained.recv_timeout(by.saturating_duration_since(Instant::now()));
 }
 
 fn text_of(seen: &Seen) -> String {
@@ -250,50 +228,45 @@ fn stalled_on(session: &str) -> Option<String> {
         .map(|mark| (*mark).to_string())
 }
 
-// Polled rather than waited on, because a wait has no deadline: the ceiling is the whole point, and an agent that has stopped answering must be killed and reported by the tool that started it, or it is left for whatever shell is holding the run to kill without a word.
-fn wait_by(
-    child: &mut Child,
+// Timed out, or the waiter died holding no status. They are not the same failure and are not reported as one.
+enum Unanswered {
+    Ceiling,
+    Lost,
+}
+
+// The exit arrives on a channel rather than being asked for every fraction of a second: the only wakeups left are the heartbeats themselves, which have work to do. Every wait is narrated, the judge's included: it shares the review's ceiling now, and a question that hangs under it would otherwise sit in silence for as long as a review may take.
+fn awaited(
+    exited: &std::sync::mpsc::Receiver<std::process::ExitStatus>,
     ceiling: Duration,
-    narrate: bool,
-    session: &str,
-) -> Result<std::process::ExitStatus, String> {
+) -> Result<std::process::ExitStatus, Unanswered> {
     let started = Instant::now();
-    let mut said_at = Duration::ZERO;
     loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return Ok(status),
-            Ok(None) => {}
-            Err(e) => return Err(format!("the reviewer did not finish: {e}")),
+        let left = ceiling.saturating_sub(started.elapsed());
+        if left.is_zero() {
+            // Asked once more before giving up: an agent that finished while this was deciding the ceiling had run out left its status in the channel, and reporting a kill over an answer already in hand throws away a review that was paid for and delivered.
+            return exited.try_recv().map_err(|_| Unanswered::Ceiling);
         }
-        // The judge says nothing: it is one question, and a heartbeat under it would be noise standing where a finding should be.
-        if narrate && started.elapsed() >= said_at + heartbeat(ceiling) {
-            said_at = started.elapsed();
-            crate::report::still_reviewing(said_at.as_secs(), ceiling.as_secs());
+        match exited.recv_timeout(heartbeat(ceiling).min(left)) {
+            Ok(status) => return Ok(status),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                crate::report::still_reviewing(started.elapsed().as_secs(), ceiling.as_secs());
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Err(Unanswered::Lost),
         }
-        if started.elapsed() >= ceiling {
-            // Killed before it is reported, so the message is not written about a process still running: the claim on the repo is released as this run exits, and a reviewer outliving it would be spending against a commit nobody is waiting for any more.
-            let _ = child.kill();
-            let _ = child.wait();
-            // Named where the transcript names it, rather than reporting the silence and leaving the cause to be guessed at.
-            let why = match stalled_on(session) {
-                Some(mark) => format!(" It was waiting on a permission: \"{mark}\"."),
-                None => String::new(),
-            };
-            return Err(format!(
-                "the reviewer ran {}s without answering and was killed at the {}s ceiling.{why}\nRaise it with --timeout <minutes> if a review here is genuinely this long; otherwise this is an agent that has stopped rather than one that is thinking.",
-                started.elapsed().as_secs(),
-                ceiling.as_secs()
-            ));
-        }
-        std::thread::sleep(POLL);
     }
+}
+
+// Asked of `kill`, for the reason `ps` is: the child is owned by the thread waiting on it, and signalling by pid needs no library this crate would otherwise carry.
+fn kill(pid: u32) {
+    let _ = std::process::Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .output();
 }
 
 fn piped(
     mut command: Command,
     prompt: &str,
     ceiling: Duration,
-    narrate: bool,
     session: &str,
 ) -> Result<Said, String> {
     let mut child = command
@@ -305,15 +278,45 @@ fn piped(
     let mut stdin = child.stdin.take().ok_or("the reviewer took no stdin")?;
     let text = prompt.to_string();
     let writer = std::thread::spawn(move || stdin.write_all(text.as_bytes()));
-    let (reading_out, out) = drain(child.stdout.take());
-    let (reading_err, err) = drain(child.stderr.take());
-    let status = match wait_by(&mut child, ceiling, narrate, session) {
+    let (read_out, out) = drain(child.stdout.take());
+    let (read_err, err) = drain(child.stderr.take());
+    let pid = child.id();
+    let started = Instant::now();
+    let (exit, exited) = std::sync::mpsc::channel();
+    // The child moves to the thread that waits on it, so its exit is pushed here instead of asked for.
+    std::thread::spawn(move || {
+        if let Ok(status) = child.wait() {
+            let _ = exit.send(status);
+        }
+    });
+    let status = match awaited(&exited, ceiling) {
         Ok(status) => status,
-        // Nothing is joined on this path: an agent killed at the ceiling leaves threads blocked on a prompt it never read and on pipes whatever it spawned still holds open, and this run has a refusal to deliver now. What it had managed to say is read out of the shared buffer instead, which is worth more than the timeout alone.
-        Err(timeout) => return Err(with_noise(&timeout, &text_of(&err))),
+        Err(Unanswered::Lost) => {
+            return Err(with_noise(
+                "the reviewer did not finish, and this side lost track of it",
+                &text_of(&err),
+            ))
+        }
+        Err(Unanswered::Ceiling) => {
+            kill(pid);
+            // Nothing is waited for on this path: an agent killed at the ceiling leaves threads blocked on a prompt it never read and on pipes whatever it spawned still holds open, and this run has a refusal to deliver now. What it had managed to say is in the shared buffer, which is worth more than the timeout alone.
+            let mut said = format!(
+            "the reviewer ran {}s without answering and was killed at the {}s ceiling.\nRaise it with --timeout <minutes> if a review here is genuinely this long; otherwise this is an agent that has stopped rather than one that is thinking.",
+            started.elapsed().as_secs(),
+            ceiling.as_secs()
+        );
+            if let Some(mark) = stalled_on(session) {
+                said.push_str(&format!(
+                    "\nIts transcript ends on a permission request: \"{mark}\"."
+                ));
+            }
+            return Err(with_noise(&said, &text_of(&err)));
+        }
     };
-    // Waited for, not joined. An exited agent normally leaves both pipes at EOF and this returns at once with the tail of the answer — but the write end outlives it wherever the agent left something running that inherited it, and a join there waits for that instead, silently past the ceiling this exists to impose. Whatever has arrived by the end of the grace is the answer; what a still-open pipe would add is not coming.
-    settling(&[reading_out, reading_err]);
+    // Bounded, because the write end outlives the agent wherever it left something running that inherited it: a wait for a pipe a third party holds open is a wait with no end, and this exists to impose one. One deadline covers both, so a holder on each pipe costs the grace once. At EOF, which is the normal case, both return at once.
+    let by = Instant::now() + SETTLING;
+    settled(&read_out, by);
+    settled(&read_err, by);
     let said = Said {
         out: text_of(&out),
         err: text_of(&err),

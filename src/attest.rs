@@ -77,22 +77,15 @@ enum Opening {
 struct Round {
     opening: Opening,
     session: crate::agent::Session,
-    tries: u32,
 }
-
-// A round that opened and never closed is taken up rather than paid for again — but only while its transcript is really there, and only so many times: a session that cannot be resumed would otherwise be retried by every run from here on, and a gate nothing can enter is worse than a review paid for twice.
-const TRIES: u32 = 3;
 
 fn round_for(declaration: &Declaration, steps: &[state::Step]) -> Result<Round, String> {
     if let Some(held) = state::in_flight()? {
-        if held.gate == declaration.gate
-            && held.tries < TRIES
-            && crate::agent::transcript(&held.session).is_some()
-        {
+        // A marker outlives only a run that never got to clear it, or a resumed round is not what this is. Its reviewer still holds everything it had read.
+        if held.gate == declaration.gate && crate::agent::transcript(&held.session).is_some() {
             return Ok(Round {
                 opening: Opening::Interrupted,
                 session: crate::agent::Session::resumed(&held.session),
-                tries: held.tries + 1,
             });
         }
     }
@@ -100,35 +93,42 @@ fn round_for(declaration: &Declaration, steps: &[state::Step]) -> Result<Round, 
         Some(session) => Round {
             opening: Opening::Again,
             session: crate::agent::Session::resumed(&session),
-            tries: 1,
         },
         None => Round {
             opening: Opening::First,
             session: crate::agent::Session::opened(),
-            tries: 1,
         },
     })
 }
 
 // A resumed reviewer holds the aim, the criteria and the ladder; one starting fresh is told them again. The tool chose which, so there is nothing here to detect.
-fn review(
+fn briefing(
     declaration: &Declaration,
-    agent: &crate::agent::Agent,
     intent: &str,
     round: &Round,
-    ceiling: std::time::Duration,
-) -> Result<(Vec<Verdict>, String), String> {
+) -> Result<(String, String), String> {
     let system = crate::brief::system(declaration, crate::brief::Reach::Diff)?;
     let prompt = match round.opening {
         Opening::First => crate::brief::opening(intent),
         Opening::Again => crate::brief::continuing(),
         Opening::Interrupted => crate::brief::resuming(),
     };
+    Ok((system, prompt))
+}
+
+// Only what the agent itself answers, or fails to. Everything a gate's own wiring can get wrong is settled before this is called, so a failure here is a failure of the round and nothing else.
+fn review(
+    declaration: &Declaration,
+    agent: &crate::agent::Agent,
+    (system, prompt): (&str, &str),
+    round: &Round,
+    ceiling: std::time::Duration,
+) -> Result<(Vec<Verdict>, String), String> {
     let answer = agent
         .run(
             crate::agent::Role::Review,
-            &system,
-            &prompt,
+            system,
+            prompt,
             &round.session,
             &crate::agent::Terms {
                 model: declaration.model.as_deref(),
@@ -277,14 +277,21 @@ pub fn run(asked: Option<&str>, ceiling: std::time::Duration) -> Result<bool, St
             crate::agent::last_wrote(round.session.id()),
         );
     }
-    // Written down before the reviewer is spawned, which is the whole point of choosing the session here: after this line, a run that dies leaves something that names what it was doing and what to take up.
-    state::open_round(&declaration.gate, round.session.id(), round.tries)?;
+    // Built before the marker: a rubric that will not open or a prompt file that is missing is the hook's wiring, and discovering it afterwards would spend an interrupted round's one resume on a fault the reviewer never saw.
+    let (system, prompt) = briefing(declaration, intent, &round)?;
+    // Written down before the reviewer is spawned, which is the whole point of choosing the session here: after this line, a run that dies leaves something naming what it was doing and what to take up.
+    state::open_round(&declaration.gate, round.session.id())?;
     report::reviewing(
         &declaration.gate,
         round.session.id(),
         crate::agent::transcript_path(round.session.id()).as_deref(),
     );
-    let (verdicts, findings) = review(declaration, &agent, intent, &round, ceiling)?;
+    let reviewed = review(declaration, &agent, (&system, &prompt), &round, ceiling);
+    // One attempt at taking a round up. If the resumed reviewer fails too, the session is not one this tool can finish, and every run from here would pay again to learn that.
+    if reviewed.is_err() && matches!(round.opening, Opening::Interrupted) {
+        state::close_round();
+    }
+    let (verdicts, findings) = reviewed?;
     let blocked = verdicts.iter().any(Verdict::blocks);
     state::record(&declaration.gate, &verdicts, blocked)?;
     let after = state::progress()?;

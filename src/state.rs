@@ -145,13 +145,19 @@ pub fn progress() -> Result<Vec<Step>, String> {
 pub struct Pending {
     pub gate: String,
     pub session: String,
-    pub tries: u32,
 }
 
-pub fn open_round(gate: &str, session: &str, tries: u32) -> Result<(), String> {
+pub fn open_round(gate: &str, session: &str) -> Result<(), String> {
     let path = here()?.join(PENDING);
-    std::fs::write(&path, format!("{gate}\t{session}\t{tries}"))
+    std::fs::write(&path, format!("{gate}\t{session}"))
         .map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
+// Called where a round is decided to be over. What is left behind is a round nothing closed.
+pub fn close_round() {
+    if let Ok(dir) = here() {
+        let _ = std::fs::remove_file(dir.join(PENDING));
+    }
 }
 
 pub fn in_flight() -> Result<Option<Pending>, String> {
@@ -159,22 +165,19 @@ pub fn in_flight() -> Result<Option<Pending>, String> {
         return Ok(None);
     };
     let mut fields = text.trim().split('\t');
-    let (Some(gate), Some(session), Some(tries)) = (fields.next(), fields.next(), fields.next())
-    else {
+    let (Some(gate), Some(session)) = (fields.next(), fields.next()) else {
         return Ok(None);
     };
     Ok(Some(Pending {
         gate: gate.to_string(),
         session: session.to_string(),
-        // Unreadable is treated as the first try: a count that cannot be parsed should not be the thing that stops a review from running.
-        tries: tries.parse().unwrap_or(0),
     }))
 }
 
 pub fn record(gate: &str, verdicts: &[Verdict], blocked: bool) -> Result<String, String> {
     let dir = here()?;
-    // The round closed, so what marked it open goes: a marker outliving its verdict is a resume of a reviewer that already answered.
-    let _ = std::fs::remove_file(dir.join(PENDING));
+    // A marker outliving its verdict is a resume of a reviewer that already answered.
+    close_round();
     let body = serialize(verdicts);
     let token = issue(gate, &body);
     let entry = dir.join(fingerprint(&token));

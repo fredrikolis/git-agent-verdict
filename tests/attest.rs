@@ -907,3 +907,38 @@ fn a_reviewer_is_never_left_in_a_mode_that_could_ask() {
         "a round ran with no mode: {seen}"
     );
 }
+
+// Taking up a dead round is worth one attempt. A session that cannot be finished would otherwise be resumed by every run from here, each paying to learn the same thing.
+#[test]
+fn a_resume_that_fails_is_not_resumed_again() {
+    let repo = Repo::new();
+    // The first round is killed mid-review, which is the only thing that leaves a marker in earnest. Every later round refuses.
+    let dies_then_refuses = concat!(
+        r#"n=$(cat rounds 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > rounds; "#,
+        r#"echo "[$AGENT_VERDICT_PRIOR_SESSION]" >> handed; "#,
+        r#"if [ "$n" = 1 ]; then sleep 60; fi; "#,
+        r#"echo "nothing this tool can record""#
+    );
+    repo.declare_runner(dies_then_refuses, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    let killed = repo.attest_within(AIM, "2s");
+    assert_eq!(killed.code, 2, "{}", killed.err);
+    let cut_short = repo.last_assigned();
+    repo.transcript_for(&cut_short);
+
+    let resumed = repo.again();
+    assert_eq!(resumed.code, 2, "{}", resumed.err);
+    assert!(
+        repo.read("handed").contains(&format!("[{cut_short}]")),
+        "the killed round was not the one taken up: {}",
+        repo.read("handed")
+    );
+
+    let fresh = repo.again();
+    assert_eq!(fresh.code, 2, "{}", fresh.err);
+    assert_ne!(
+        repo.last_assigned(),
+        cut_short,
+        "a session that failed on resume was resumed a second time"
+    );
+}
