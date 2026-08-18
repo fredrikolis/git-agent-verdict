@@ -4,6 +4,23 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [1.13.0] - 2026-08-17
+
+Every 1.x before this is yanked and its tag deleted. The changes they describe are all in this
+release.
+
+### Added
+- `--standard <name>` declares a rubric shipped inside the binary. Eight ship: `programming`,
+  `testing`, `cli`, `frontend`, `agent-communication`, `human-communication`, `terse-log`,
+  `minimal-docs`. They are read from the binary, never fetched.
+- `--standards` lists them, `--standards <name>` prints one whole.
+- The standards live as Markdown under `standards/`; the build generates the bundled list from that
+  folder.
+- The setup guide declares `minimal-docs` over every `.md` for a new repo.
+
+### Changed
+- The setup guide is bullets, not commentary: 94 lines to 54.
+
 ## [1.12.0] - 2026-08-17
 
 ### Added
