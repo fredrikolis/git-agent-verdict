@@ -63,6 +63,7 @@ git agent-verdict "$1" core --model opus --standard programming --standard testi
 | `frontend` | Component architecture, framework-neutral: data flow, boundaries, lifecycle, state. |
 | `agent-communication` | Prose an agent acts on: findings not explanations, dense and scannable. |
 | `human-communication` | Prose a person reads: a README, a guide, an error message. |
+| `terse-log` | Entries in an append-only log: changelog, roadmap, worklog, decision record. |
 
 `git agent-verdict --standards` lists them with what each one judges, and `--standards <name>`
 prints one in full. They live as Markdown in [`standards/`](standards/) and the build bundles the
