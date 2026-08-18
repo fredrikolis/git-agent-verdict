@@ -17,10 +17,8 @@
   what the host allows.
 
 ### Fixed
-- A headless reviewer that asks for a permission waits for an answer nobody can give, which looked
-  from here like a reviewer thinking. It is now killed once its transcript has been idle two
-  minutes with a permission request in it, and the refusal quotes what it asked for. A ceiling that
-  fires for the same reason says so too.
+- A ceiling that fires while the reviewer's transcript shows a permission request says so, instead
+  of reporting only the silence.
 
 ## [1.13.0] - 2026-08-17
 

@@ -233,7 +233,7 @@ fn text_of(seen: &Seen) -> String {
     String::from_utf8_lossy(&hold(seen)).into_owned()
 }
 
-// What a headless reviewer stalls on. Nobody is at the terminal, so a permission prompt is a wait with no end, and to this side it is indistinguishable from a reviewer thinking. These are the strings the agent writes into its own transcript when it happens.
+// Read only after the ceiling has already fired, never to decide that it should. These are strings the agent happens to write today, not an interface it promises, so a miss costs the message its last sentence and nothing more. Deciding a kill on them would spend a paid review on a guess.
 const DENIED: [&str; 3] = [
     "denied by the Claude Code auto mode classifier",
     "doesn't want to proceed with this tool use",
@@ -249,15 +249,6 @@ fn stalled_on(session: &str) -> Option<String> {
         .find(|mark| tail.contains(*mark))
         .map(|mark| (*mark).to_string())
 }
-
-// Idle, not slow: an agent waiting on an approval writes nothing further, so the file it was appending to stops growing. A reviewer that is working is a reviewer whose transcript moves.
-fn idle_for(session: &str) -> Option<Duration> {
-    let written = transcript(session)?.metadata().ok()?.modified().ok()?;
-    written.elapsed().ok()
-}
-
-// Long enough that a reviewer reading a large file in one go is not mistaken for a stalled one, short enough that a stall costs minutes instead of the whole ceiling.
-const IDLE: Duration = Duration::from_secs(120);
 
 // Polled rather than waited on, because a wait has no deadline: the ceiling is the whole point, and an agent that has stopped answering must be killed and reported by the tool that started it, or it is left for whatever shell is holding the run to kill without a word.
 fn wait_by(
@@ -278,16 +269,6 @@ fn wait_by(
         if narrate && started.elapsed() >= said_at + heartbeat(ceiling) {
             said_at = started.elapsed();
             crate::report::still_reviewing(said_at.as_secs(), ceiling.as_secs());
-        }
-        // Killed early where the transcript says why: waiting out a thirty-minute ceiling for an approval nobody can give buys nothing but the wait.
-        if narrate && idle_for(session).is_some_and(|idle| idle >= IDLE) {
-            if let Some(mark) = stalled_on(session) {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!(
-                    "the reviewer asked for a permission and stopped: \"{mark}\".\nIt runs headless, so nobody can answer, and it would have waited out the whole ceiling.\nDeclare the gate --read-only, or grant the tool it asked for."
-                ));
-            }
         }
         if started.elapsed() >= ceiling {
             // Killed before it is reported, so the message is not written about a process still running: the claim on the repo is released as this run exits, and a reviewer outliving it would be spending against a commit nobody is waiting for any more.
