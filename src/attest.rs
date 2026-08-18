@@ -130,8 +130,11 @@ fn review(
             &system,
             &prompt,
             &round.session,
-            declaration.model.as_deref(),
-            ceiling,
+            &crate::agent::Terms {
+                model: declaration.model.as_deref(),
+                ceiling,
+                read_only: declaration.read_only,
+            },
         )
         .map_err(|said| declared_model_fault(declaration, &said))?;
     let verdicts = crate::runner::verdicts(&answer, declaration.brief.simple)?;
@@ -242,8 +245,11 @@ pub fn run(asked: Option<&str>, ceiling: std::time::Duration) -> Result<bool, St
                 &crate::brief::judge_prompt(asked),
                 // Its own session, opened and finished within this one question: there is nothing here worth resuming, and nothing a later round would want from it.
                 &crate::agent::Session::opened(),
-                None,
-                ceiling,
+                &crate::agent::Terms {
+                    model: None,
+                    ceiling,
+                    read_only: false,
+                },
             )?;
             crate::runner::judge(&answer, asked)?;
             state::set_intent(asked)?;

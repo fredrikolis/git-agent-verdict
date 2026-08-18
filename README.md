@@ -48,6 +48,10 @@ does not know. An annotation check and a correctness review are not worth the sa
 is which is the repo's call. Omitted, the agent picks. A model the agent will not answer for fails
 the run and names the gate that declared it: that is the hook's wiring, not the commit's.
 
+`--read-only` runs a gate's reviewer in a mode that cannot write. The harness refuses the call, so a
+rule demanding a write is refused too, and the reviewer still answers. Declare it where the tree is
+being worked in by someone else.
+
 `--standard` names a rubric shipped inside the binary, so a repo can gate on a general measure
 without hosting or copying one:
 

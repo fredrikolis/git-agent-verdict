@@ -140,6 +140,10 @@ impl Reach {
     }
 }
 
+// A reviewer that may write is told where it may write; one that may not is told so plainly, because the harness will refuse the call and a reviewer that does not know why spends its round arguing with the refusal.
+const SANDBOX: &str = "Do not change the working tree. To test something, copy the repo to a temp directory and change it there. Confirm with `git diff --stat` before you answer.";
+const NO_SANDBOX: &str = "This session cannot write anywhere, and every attempt will be refused. Confirm a suspicion by reading. One you cannot confirm that way is a guess: leave it out.";
+
 // Quoted for the shell the reviewer types it into: a pathspec is written to be globbed by git, not by that shell.
 fn quoted(paths: &[String]) -> String {
     let quoted: Vec<String> = paths
@@ -201,6 +205,14 @@ pub fn system(declaration: &Declaration, reach: Reach) -> Result<String, String>
         .replace("{{scope}}", &reach.command(&declaration.paths))
         .replace("{{subject}}", reach.subject())
         .replace("{{reach}}", reach.rule())
+        .replace(
+            "{{sandbox}}",
+            if declaration.read_only {
+                NO_SANDBOX
+            } else {
+                SANDBOX
+            },
+        )
         .replace("{{ladder}}", ladder)
         .replace("{{marker}}", MARKER)
         .replace("{{shape}}", asked_of(declaration.brief.simple)))

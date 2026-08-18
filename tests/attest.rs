@@ -869,3 +869,41 @@ fn audit_sweeps_every_gate_even_when_one_reviewer_fails() {
     assert!(run.out.contains("ann: major=0 moderate=1"), "{}", run.out);
     assert!(run.err.contains("no verdict from"), "{}", run.err);
 }
+
+// The flag has to reach the agent, not just the brief: instruction is not enforcement when the repo is being worked in.
+#[test]
+fn a_read_only_gate_runs_its_reviewer_in_a_mode_that_cannot_write() {
+    let repo = Repo::new();
+    let records_argv = concat!(
+        r#"echo "$AGENT_VERDICT_MODE" > mode-seen; "#,
+        r#"echo "VERDICT: reviewer=fake session=s-1 major=0 moderate=0 minor=0""#
+    );
+    repo.declare_runner(
+        records_argv,
+        &[r#""$1" ro --read-only --doc rubric.md --path ."#],
+    );
+    repo.stage(&["src.rs"]);
+    let run = repo.attest(AIM);
+    assert_eq!(run.code, 0, "{}", run.err);
+    assert_eq!(repo.read("mode-seen").trim(), "plan", "{}", run.err);
+}
+
+// A reviewer runs headless, so it must never be in a position to ask: whatever a prompt would have covered, it decides alone.
+#[test]
+fn a_reviewer_is_never_left_in_a_mode_that_could_ask() {
+    let repo = Repo::new();
+    let records = concat!(
+        r#"echo "$AGENT_VERDICT_MODE" >> modes-seen; "#,
+        r#"echo "VERDICT: reviewer=fake session=s-1 major=0 moderate=0 minor=0""#
+    );
+    repo.declare_runner(records, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    let run = repo.attest(AIM);
+    assert_eq!(run.code, 0, "{}", run.err);
+    let seen = repo.read("modes-seen");
+    assert!(seen.contains("dontAsk"), "{seen}");
+    assert!(
+        !seen.lines().any(str::is_empty),
+        "a round ran with no mode: {seen}"
+    );
+}

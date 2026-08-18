@@ -4,6 +4,24 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [Unreleased]
+
+### Added
+- `--read-only` on a gate runs its reviewer in a mode that cannot write anywhere, and tells it so.
+  The commit-msg author knows whether a review may touch the tree; a reviewer racing an active
+  branch should not.
+
+- A reviewer is always given a permission mode and never left to the default: `plan` for a
+  read-only gate, `dontAsk` otherwise. It runs headless and cannot answer a prompt, so anything the
+  host's settings would have prompted for is refused rather than granted. This tool never widens
+  what the host allows.
+
+### Fixed
+- A headless reviewer that asks for a permission waits for an answer nobody can give, which looked
+  from here like a reviewer thinking. It is now killed once its transcript has been idle two
+  minutes with a permission request in it, and the refusal quotes what it asked for. A ceiling that
+  fires for the same reason says so too.
+
 ## [1.13.0] - 2026-08-17
 
 Every 1.x before this is yanked and its tag deleted. The changes they describe are all in this

@@ -34,6 +34,13 @@ impl Session {
     }
 }
 
+// What a round is bought under: which model, how long it may take, and whether it may write. Together because they travel together — a gate declares all three and none of them is a property of the question being asked.
+pub struct Terms<'a> {
+    pub model: Option<&'a str>,
+    pub ceiling: Duration,
+    pub read_only: bool,
+}
+
 // What an agent is being asked for, not which model answers it: which model is cheap enough for a one-line question is knowledge about that agent, and it lives with the code that drives it.
 #[derive(Clone, Copy)]
 pub enum Role {
@@ -61,10 +68,9 @@ impl Agent {
         system: &str,
         prompt: &str,
         session: &Session,
-        model: Option<&str>,
-        ceiling: Duration,
+        terms: &Terms,
     ) -> Result<Answer, String> {
-        claude(role, system, prompt, session, model, ceiling)
+        claude(role, system, prompt, session, terms)
     }
 }
 
@@ -129,8 +135,7 @@ fn claude(
     system: &str,
     prompt: &str,
     session: &Session,
-    model: Option<&str>,
-    ceiling: Duration,
+    terms: &Terms,
 ) -> Result<Answer, String> {
     let file = system_file(system)?;
     let mut command = Command::new("claude");
@@ -141,13 +146,23 @@ fn claude(
         Session::Fresh(id) => command.args(["--session-id", id]),
         Session::Resume(id) => command.args(["--resume", id]),
     };
-    if let Some(model) = claude_model(role, model) {
+    if let Some(model) = claude_model(role, terms.model) {
         command.args(["--model", model]);
     }
+    // Always stated, never left to the default, and never widened past what the host already allows. A reviewer runs headless, so a prompt is a wait with no end; dontAsk resolves that by refusing what would have been asked rather than by granting it, which leaves the host's own settings in charge of what a reviewer may do. Read-only narrows it further: a gate declaring it is reviewing a tree somebody else is working in, and a reviewer that writes there is a second author nobody asked for.
+    let mode = if terms.read_only { "plan" } else { "dontAsk" };
+    command.args(["--permission-mode", mode]);
     let told = |detail: String| with_transcript(&detail, session.id());
     // Narrated only for a review: the judge is one question answered in seconds, and nobody is waiting on it for signs of life.
     let narrate = matches!(role, Role::Review);
-    let said = piped(command, prompt, claude_ceiling(role, ceiling), narrate).map_err(told)?;
+    let said = piped(
+        command,
+        prompt,
+        claude_ceiling(role, terms.ceiling),
+        narrate,
+        session.id(),
+    )
+    .map_err(told)?;
     let _ = std::fs::remove_file(&file);
     read_claude(&said).map_err(told)
 }
@@ -218,11 +233,38 @@ fn text_of(seen: &Seen) -> String {
     String::from_utf8_lossy(&hold(seen)).into_owned()
 }
 
+// What a headless reviewer stalls on. Nobody is at the terminal, so a permission prompt is a wait with no end, and to this side it is indistinguishable from a reviewer thinking. These are the strings the agent writes into its own transcript when it happens.
+const DENIED: [&str; 3] = [
+    "denied by the Claude Code auto mode classifier",
+    "doesn't want to proceed with this tool use",
+    "Claude requested permissions to use",
+];
+
+// The tail only: a transcript runs to megabytes and the answer is in the last thing that happened.
+fn stalled_on(session: &str) -> Option<String> {
+    let text = std::fs::read_to_string(transcript(session)?).ok()?;
+    let tail: String = text.lines().rev().take(6).collect::<Vec<_>>().join(" ");
+    DENIED
+        .iter()
+        .find(|mark| tail.contains(*mark))
+        .map(|mark| (*mark).to_string())
+}
+
+// Idle, not slow: an agent waiting on an approval writes nothing further, so the file it was appending to stops growing. A reviewer that is working is a reviewer whose transcript moves.
+fn idle_for(session: &str) -> Option<Duration> {
+    let written = transcript(session)?.metadata().ok()?.modified().ok()?;
+    written.elapsed().ok()
+}
+
+// Long enough that a reviewer reading a large file in one go is not mistaken for a stalled one, short enough that a stall costs minutes instead of the whole ceiling.
+const IDLE: Duration = Duration::from_secs(120);
+
 // Polled rather than waited on, because a wait has no deadline: the ceiling is the whole point, and an agent that has stopped answering must be killed and reported by the tool that started it, or it is left for whatever shell is holding the run to kill without a word.
 fn wait_by(
     child: &mut Child,
     ceiling: Duration,
     narrate: bool,
+    session: &str,
 ) -> Result<std::process::ExitStatus, String> {
     let started = Instant::now();
     let mut said_at = Duration::ZERO;
@@ -237,12 +279,27 @@ fn wait_by(
             said_at = started.elapsed();
             crate::report::still_reviewing(said_at.as_secs(), ceiling.as_secs());
         }
+        // Killed early where the transcript says why: waiting out a thirty-minute ceiling for an approval nobody can give buys nothing but the wait.
+        if narrate && idle_for(session).is_some_and(|idle| idle >= IDLE) {
+            if let Some(mark) = stalled_on(session) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "the reviewer asked for a permission and stopped: \"{mark}\".\nIt runs headless, so nobody can answer, and it would have waited out the whole ceiling.\nDeclare the gate --read-only, or grant the tool it asked for."
+                ));
+            }
+        }
         if started.elapsed() >= ceiling {
             // Killed before it is reported, so the message is not written about a process still running: the claim on the repo is released as this run exits, and a reviewer outliving it would be spending against a commit nobody is waiting for any more.
             let _ = child.kill();
             let _ = child.wait();
+            // Named where the transcript names it, rather than reporting the silence and leaving the cause to be guessed at.
+            let why = match stalled_on(session) {
+                Some(mark) => format!(" It was waiting on a permission: \"{mark}\"."),
+                None => String::new(),
+            };
             return Err(format!(
-                "the reviewer ran {}s without answering and was killed at the {}s ceiling.\nRaise it with --timeout <minutes> if a review here is genuinely this long; otherwise this is an agent that has stopped rather than one that is thinking.",
+                "the reviewer ran {}s without answering and was killed at the {}s ceiling.{why}\nRaise it with --timeout <minutes> if a review here is genuinely this long; otherwise this is an agent that has stopped rather than one that is thinking.",
                 started.elapsed().as_secs(),
                 ceiling.as_secs()
             ));
@@ -256,6 +313,7 @@ fn piped(
     prompt: &str,
     ceiling: Duration,
     narrate: bool,
+    session: &str,
 ) -> Result<Said, String> {
     let mut child = command
         .stdin(Stdio::piped())
@@ -268,7 +326,7 @@ fn piped(
     let writer = std::thread::spawn(move || stdin.write_all(text.as_bytes()));
     let (reading_out, out) = drain(child.stdout.take());
     let (reading_err, err) = drain(child.stderr.take());
-    let status = match wait_by(&mut child, ceiling, narrate) {
+    let status = match wait_by(&mut child, ceiling, narrate, session) {
         Ok(status) => status,
         // Nothing is joined on this path: an agent killed at the ceiling leaves threads blocked on a prompt it never read and on pipes whatever it spawned still holds open, and this run has a refusal to deliver now. What it had managed to say is read out of the shared buffer instead, which is worth more than the timeout alone.
         Err(timeout) => return Err(with_noise(&timeout, &text_of(&err))),

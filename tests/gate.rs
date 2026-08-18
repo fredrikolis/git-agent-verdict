@@ -504,3 +504,32 @@ fn the_shipped_standards_can_be_listed_and_read() {
     assert_eq!(unknown.code, 2, "{}", unknown.err);
     assert!(unknown.err.contains("this build ships"), "{}", unknown.err);
 }
+
+// A gate whose repo is being worked in by someone else: the reviewer answers a question, it does not get to be a second author.
+#[test]
+fn a_read_only_gate_tells_its_reviewer_it_cannot_write() {
+    let repo = Repo::new();
+    repo.declare(
+        "VERDICT: reviewer=fake session=s-1 major=0 moderate=0 minor=0",
+        &[r#""$1" ro --read-only --doc rubric.md --path ."#],
+    );
+    repo.stage(&["src.rs"]);
+    let run = repo.capture(&["--reviewer-prompt", "ro"]);
+    assert_eq!(run.code, 0, "{}", run.err);
+    assert!(run.out.contains("cannot write anywhere"), "{}", run.out);
+    assert!(!run.out.contains("copy the repo to a temp"), "{}", run.out);
+}
+
+// Without it the reviewer keeps the sandbox it has always had.
+#[test]
+fn a_normal_gate_still_offers_its_reviewer_a_sandbox() {
+    let repo = Repo::new();
+    repo.declare(
+        "VERDICT: reviewer=fake session=s-1 major=0 moderate=0 minor=0",
+        &[r#""$1" rw --doc rubric.md --path ."#],
+    );
+    repo.stage(&["src.rs"]);
+    let run = repo.capture(&["--reviewer-prompt", "rw"]);
+    assert!(run.out.contains("copy the repo to a temp"), "{}", run.out);
+    assert!(!run.out.contains("cannot write anywhere"), "{}", run.out);
+}

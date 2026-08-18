@@ -8,6 +8,7 @@ const LIST_ENV: &str = "GIT_AGENT_VERDICT_LIST";
 
 pub struct Declaration {
     pub gate: String,
+    pub read_only: bool,
     pub standards: Vec<String>,
     pub docs: Vec<String>,
     pub rules: Vec<String>,
@@ -27,6 +28,9 @@ pub fn emit_gate(inv: &Invocation) {
     if inv.brief.simple {
         fields.push("simple".to_string());
     }
+    if inv.read_only {
+        fields.push("read-only".to_string());
+    }
     if let Some(model) = &inv.model {
         fields.push(format!("model={model}"));
     }
@@ -43,6 +47,7 @@ pub fn emit_gate(inv: &Invocation) {
 fn read_gate(gate: &str, fields: std::str::Split<'_, char>) -> Option<Declaration> {
     let mut declaration = Declaration {
         gate: gate.to_string(),
+        read_only: false,
         standards: Vec::new(),
         docs: Vec::new(),
         rules: Vec::new(),
@@ -63,6 +68,8 @@ fn read_gate(gate: &str, fields: std::str::Split<'_, char>) -> Option<Declaratio
             declaration.model = Some(name.to_string());
         } else if let Some(path) = field.strip_prefix("prompt=") {
             declaration.brief.prompt = Some(path.to_string());
+        } else if field == "read-only" {
+            declaration.read_only = true;
         } else if field == "simple" {
             declaration.brief.simple = true;
         }

@@ -34,7 +34,12 @@ const GUIDE: &str = r#"WIRING A REPO — git-agent-verdict
    - Line order is review order. Gate names are yours, and reach the trailer as Reviewed-<name>.
    - A gate needs one --standard, --doc or --rule, and takes any mix.
    - --simple drops the MAJOR rung: reports, never blocks.
+   - --read-only refuses the reviewer every write, at the harness. For a tree someone else is
+     working in, or a reviewer that has no business touching one.
    - --model passes through unchecked. Omitted, the agent picks.
+   - A reviewer runs headless and cannot answer a prompt, so it is given no chance to ask: anything
+     your agent settings would have prompted for is refused instead. Pre-approve what a review
+     needs there; this tool never widens it.
    - --path is a git pathspec, matching at any depth.
    - --doc paths are placeholders here; one that does not resolve is refused.
    - $KB and friends expand, so a rubric may live outside the repo where nothing can stage it.

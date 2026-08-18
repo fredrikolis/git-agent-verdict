@@ -228,18 +228,19 @@ impl Repo {
         std::fs::create_dir_all(&bin).expect("bin dir");
         let stub = format!(
             r#"#!/bin/sh
-system=""; resume=""; assigned=""
+system=""; resume=""; assigned=""; mode=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --append-system-prompt-file) system="$2"; shift 2 ;;
     --resume) resume="$2"; shift 2 ;;
     --session-id) assigned="$2"; shift 2 ;;
+    --permission-mode) mode="$2"; shift 2 ;;
     --model) model="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
 echo "$assigned" >> assigned-sessions
-export AGENT_VERDICT_SYSTEM="$system" AGENT_VERDICT_PRIOR_SESSION="$resume"
+export AGENT_VERDICT_SYSTEM="$system" AGENT_VERDICT_PRIOR_SESSION="$resume" AGENT_VERDICT_MODE="$mode"
 if grep -q "You judge one line of text" "$system" 2>/dev/null; then
   text=$(cat judge-answer 2>/dev/null || echo "VERDICT: accepted")
 else

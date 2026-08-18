@@ -30,8 +30,11 @@ fn sweep(
         &system,
         &crate::brief::sweeping(),
         &session,
-        declaration.model.as_deref(),
-        ceiling,
+        &crate::agent::Terms {
+            model: declaration.model.as_deref(),
+            ceiling,
+            read_only: declaration.read_only,
+        },
     )?;
     let verdicts = runner::verdicts(&answer, declaration.brief.simple)?;
     Ok((verdicts, runner::findings(&answer.text)))

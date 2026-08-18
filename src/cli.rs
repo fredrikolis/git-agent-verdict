@@ -1,7 +1,7 @@
 // Concern: the invocation grammar — every mode this binary answers and the flags each one accepts | Non-concern: what a mode decides, or anything it prints | IO: (argv) -> Mode
 
 pub const USAGE: &str = concat!(
-    "usage: git-agent-verdict <msg-file> <gate> [--simple] [--model <name>]\n",
+    "usage: git-agent-verdict <msg-file> <gate> [--simple] [--read-only] [--model <name>]\n",
     "                         [--override-prompt <path>]\n",
     "                         (--standard <name> | --doc <path> | --rule <text>)...\n",
     "                         --path <pathspec>...\n",
@@ -68,6 +68,7 @@ pub struct Brief {
 }
 
 pub struct Invocation {
+    pub read_only: bool,
     pub model: Option<String>,
     pub msg_file: String,
     pub gate: String,
@@ -141,6 +142,7 @@ struct Parsed {
     require_version: Option<String>,
     setup_guide: bool,
     list_standards: bool,
+    read_only: bool,
     intent: Option<String>,
     repo: Option<String>,
     timeout: Option<String>,
@@ -179,6 +181,7 @@ fn collect(args: impl Iterator<Item = String>) -> Result<Parsed, String> {
             BACKGROUND => p.background = true,
             WHOLE => p.whole = true,
             "--simple" => p.brief.simple = true,
+            "--read-only" => p.read_only = true,
             "--override-prompt" => {
                 let path = args.next().ok_or("--override-prompt needs a path")?;
                 p.brief.prompt = Some(canonical("--override-prompt", &path)?);
@@ -219,6 +222,7 @@ fn only(detail: &str, p: &Parsed, takes: &[&str]) -> Result<(), String> {
         (BACKGROUND, p.background),
         (WHOLE, p.whole),
         ("--simple", p.brief.simple),
+        ("--read-only", p.read_only),
         ("--override-prompt", p.brief.prompt.is_some()),
         ("--standard", !p.standards.is_empty()),
         ("--doc", !p.docs.is_empty()),
@@ -446,6 +450,7 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Mode, String> {
         ));
     }
     Ok(Mode::Gate(Box::new(Invocation {
+        read_only: p.read_only,
         model: p.model.clone(),
         msg_file,
         gate: gate_name(&gate)?,
