@@ -4,21 +4,21 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
-## [Unreleased]
+## [1.14.0] - 2026-08-18
 
 ### Added
-- `--read-only` on a gate runs its reviewer in a mode that cannot write anywhere, and tells it so.
-  The commit-msg author knows whether a review may touch the tree; a reviewer racing an active
-  branch should not.
+- `--read-only` gates. The reviewer cannot write; the harness refuses it.
+- Every reviewer gets a permission mode, so none can be asked what nobody can answer.
 
-- A reviewer is always given a permission mode and never left to the default: `plan` for a
-  read-only gate, `dontAsk` otherwise. It runs headless and cannot answer a prompt, so anything the
-  host's settings would have prompted for is refused rather than granted. This tool never widens
-  what the host allows.
+### Changed
+- The agent's exit is pushed, not polled. A return or crash is seen at once.
+- The judge shares the review's ceiling and heartbeat. No wait is silent.
 
 ### Fixed
-- A ceiling that fires while the reviewer's transcript shows a permission request says so, instead
-  of reporting only the silence.
+- A review finishing as the ceiling expired was reported killed, its answer discarded.
+- A gate's own broken wiring spent an interrupted round's one resume.
+- Two pipes held open past the agent's exit cost the grace twice.
+- A ceiling firing on a permission request now names it.
 
 ## [1.13.0] - 2026-08-17
 
