@@ -37,6 +37,9 @@ const GUIDE: &str = r#"WIRING A REPO — git-agent-verdict
        --rule "every public item carries a one-line comment" \
        --path .
 
+     # Holds documentation to a stub, across every .md in the repo.
+     git agent-verdict "$1" docs --simple --standard minimal-docs --path "*.md"
+
      # Advisory: same ladder, no MAJOR rung, never blocks. The shell expands $KB, so a rubric may live
      # outside the repo, where nothing can stage it. A gate needs one --standard, --doc or --rule.
      # `*.md` is a git pathspec, so it matches at any depth: this gate reads docs/ too.
