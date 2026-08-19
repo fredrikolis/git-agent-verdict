@@ -12,6 +12,7 @@ mod lock;
 mod report;
 mod runner;
 mod setup;
+mod signals;
 mod state;
 mod trailer;
 
@@ -94,6 +95,7 @@ fn enter(repo: &str) -> Result<(), String> {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    signals::arm();
     at_repo_root();
     // The sole argument, never one of several: scanned across the whole line, a stray --version in a gate's declaration exits 0 and the gate passes having checked nothing.
     if let [only] = args.as_slice() {

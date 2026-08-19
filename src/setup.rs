@@ -37,6 +37,7 @@ const GUIDE: &str = r#"WIRING A REPO — git-agent-verdict
    - --read-only refuses the reviewer every write, at the harness. For a tree someone else is
      working in, or a reviewer that has no business touching one.
    - --model passes through unchecked. Omitted, the agent picks.
+   - --override-prompt <path> replaces the reviewer's standing instructions for that gate.
    - A reviewer runs headless and cannot answer a prompt, so it is given no chance to ask: anything
      your agent settings would have prompted for is refused instead. Pre-approve what a review
      needs there; this tool never widens it.
@@ -45,11 +46,8 @@ const GUIDE: &str = r#"WIRING A REPO — git-agent-verdict
    - $KB and friends expand, so a rubric may live outside the repo where nothing can stage it.
    - Staging a rubric is refused. It lands on its own with --no-verify.
    - --standards lists what this build ships; --standards <name> prints one.
-   - A rule over 128 KiB fails the exec, and one carrying a newline splits in two. Redirect it to
-     a file and --doc that:
-
-     rubric="$(git rev-parse --git-path agent-verdict-generated.md)"
-     generate-rubric > "$rubric"
+   - --rule takes multi-line text, so `--rule "$(generate-rubric)"` works. Past the 128 KiB argv
+     cap, pipe it: `generate-rubric | git agent-verdict "$1" gen --rule - --path .`
 
 2. Per clone, by hand:
 
@@ -69,7 +67,9 @@ const GUIDE: &str = r#"WIRING A REPO — git-agent-verdict
    - --repo is absolute; the shell's directory is never consulted.
    - Fixing what a review named re-opens its gate. Run it again after each fix.
    - --intent is needed on the first run only.
-   - No wait loop. A second attest refuses at once, naming the pid holding the repo."#;
+   - No wait loop. A second attest refuses at once, saying how long the repo has been held.
+   - The reviewer inherits the claim, so a review that outlives the run which started it keeps the
+     repo held. The refusal names what holds it, where the system will say."#;
 
 pub fn guide() -> String {
     GUIDE.replace("{{line}}", &line())

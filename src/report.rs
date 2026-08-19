@@ -138,16 +138,6 @@ pub fn judging() {
     eprintln!("git-agent-verdict: judging the intent…");
 }
 
-// A claim with nothing running under it is this tool's one record that the last run did not end on its own terms, and clearing it in silence throws that away. What it reports is when the lock file was written, not how long the run lasted: the claim records a start and nothing else, and it is read whenever the next run happens along — an hour later, that difference is an hour of running the tool would be inventing. What bounds the end is the reviewer's own last write, which `resuming` reports.
-pub fn abandoned(pid: &str, path: &std::path::Path, ago: u64) {
-    eprintln!(
-        "git-agent-verdict: removing a stale lock file: {}",
-        path.display()
-    );
-    eprintln!("  attest pid {pid} wrote it {ago}s ago and that process is gone, so it was killed or it crashed");
-    eprintln!("  the file records when it was written, not when that run stopped — nothing here dates the end");
-}
-
 // The agent's own transcript, and the one command that reads it: a caller asking whether the review is still going gets an answer for one line of output, and pays nothing while it does not ask. Handed the command rather than a digest rendered here — a format invented here is a format maintained here for ever, and the transcript belongs to the agent.
 const LATEST: &str = r#"jq -rc 'select(.type=="assistant") | .timestamp[11:19] as $t | .message.content[] | if .type=="tool_use" then "\($t) \(.name) \(.input|tostring|gsub("\n";" "))" elif .type=="text" then "\($t) » \(.text|gsub("\n";" "))" else empty end'"#;
 

@@ -1,8 +1,8 @@
-# Concern: the crate manifest — one binary, and the one dependency that reads an agent back | Non-concern: how the binary is shipped (the release pipeline owns that) | IO: none
+# Concern: the crate manifest — one binary, and the two dependencies it carries | Non-concern: how the binary is shipped (the release pipeline owns that) | IO: none
 
 [package]
 name = "git-agent-verdict"
-version = "1.14.0"
+version = "1.15.0"
 edition = "2021"
 description = "Verify that a commit message carries an attested review verdict"
 license = "MIT"
@@ -20,3 +20,5 @@ strip = true
 
 [dependencies]
 serde_json = "1.0.151"
+# What std does not reach: trapping a signal, locking a descriptor, and ending a process group.
+libc = "0.2"

@@ -286,7 +286,14 @@ pub fn run(asked: Option<&str>, ceiling: std::time::Duration) -> Result<bool, St
         round.session.id(),
         crate::agent::transcript_path(round.session.id()).as_deref(),
     );
+    // Armed while the round runs and dropped when it ends: a run reaped from outside otherwise says nothing, and a sentence outliving its round names a review that already finished.
+    crate::signals::say(&format!(
+        "while reviewing {}, session {}.",
+        declaration.gate,
+        round.session.id()
+    ));
     let reviewed = review(declaration, &agent, (&system, &prompt), &round, ceiling);
+    crate::signals::quiet();
     // One attempt at taking a round up. If the resumed reviewer fails too, the session is not one this tool can finish, and every run from here would pay again to learn that.
     if reviewed.is_err() && matches!(round.opening, Opening::Interrupted) {
         state::close_round();

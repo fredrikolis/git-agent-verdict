@@ -143,7 +143,7 @@ fn claude(
     let mode = if terms.read_only { "plan" } else { "dontAsk" };
     command.args(["--permission-mode", mode]);
     let told = |detail: String| with_transcript(&detail, session.id());
-    let said = piped(command, prompt, terms.ceiling, session.id()).map_err(told)?;
+    let said = piped(role, command, prompt, terms.ceiling, session.id()).map_err(told)?;
     let _ = std::fs::remove_file(&file);
     read_claude(&said).map_err(told)
 }
@@ -235,19 +235,29 @@ enum Unanswered {
 }
 
 // The exit arrives on a channel rather than being asked for every fraction of a second: the only wakeups left are the heartbeats themselves, which have work to do. Every wait is narrated, the judge's included: it shares the review's ceiling now, and a question that hangs under it would otherwise sit in silence for as long as a review may take.
-fn awaited(
-    exited: &std::sync::mpsc::Receiver<std::process::ExitStatus>,
-    ceiling: Duration,
-) -> Result<std::process::ExitStatus, Unanswered> {
+fn awaited(exited: &std::sync::mpsc::Receiver<bool>, ceiling: Duration) -> Result<(), Unanswered> {
     let started = Instant::now();
     loop {
         let left = ceiling.saturating_sub(started.elapsed());
         if left.is_zero() {
             // Asked once more before giving up: an agent that finished while this was deciding the ceiling had run out left its status in the channel, and reporting a kill over an answer already in hand throws away a review that was paid for and delivered.
-            return exited.try_recv().map_err(|_| Unanswered::Ceiling);
+            return match exited.try_recv() {
+                Ok(true) => Ok(()),
+                Ok(false) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    Err(Unanswered::Lost)
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => Err(Unanswered::Ceiling),
+            };
         }
         match exited.recv_timeout(heartbeat(ceiling).min(left)) {
-            Ok(status) => return Ok(status),
+            // False is the watcher saying it could not observe the child at all, which is not the child answering.
+            Ok(watched) => {
+                return if watched {
+                    Ok(())
+                } else {
+                    Err(Unanswered::Lost)
+                }
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 crate::report::still_reviewing(started.elapsed().as_secs(), ceiling.as_secs());
             }
@@ -256,19 +266,27 @@ fn awaited(
     }
 }
 
-// Asked of `kill`, for the reason `ps` is: the child is owned by the thread waiting on it, and signalling by pid needs no library this crate would otherwise carry.
+// The group, not the process: the reviewer leads its own, and what it spawned holds the repo's claim until it exits. Signalled by hand because the child belongs to the thread waiting on it.
 fn kill(pid: u32) {
-    let _ = std::process::Command::new("kill")
-        .args(["-9", &pid.to_string()])
-        .output();
+    unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
 }
 
 fn piped(
+    role: Role,
     mut command: Command,
     prompt: &str,
     ceiling: Duration,
     session: &str,
 ) -> Result<Said, String> {
+    // Its own group, so ending it at the ceiling ends everything it started. Set for every agent, because a judge that hangs has to be endable too.
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    // The claim rides into the reviewer and no further: a review that outlives the run still holds the repo, which is the point, while a judge that outlived one would hold it for an answer nobody is left to read.
+    if matches!(role, Role::Review) {
+        crate::lock::passed_to(&mut command);
+    }
     let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -281,24 +299,42 @@ fn piped(
     let (read_out, out) = drain(child.stdout.take());
     let (read_err, err) = drain(child.stderr.take());
     let pid = child.id();
+    crate::signals::spawned(role, pid);
     let started = Instant::now();
     let (exit, exited) = std::sync::mpsc::channel();
-    // The child moves to the thread that waits on it, so its exit is pushed here instead of asked for.
+    // Observed without reaping, and reaped only after the group is ended. A leader that has been reaped frees its pid, and with it the group id: signalling that number afterwards would reach whatever the kernel has since given it. Left as a zombie, the leader holds both reserved until this run is finished with them.
     std::thread::spawn(move || {
-        if let Ok(status) = child.wait() {
-            let _ = exit.send(status);
-        }
+        let mut seen: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let watched =
+            unsafe { libc::waitid(libc::P_PID, pid, &mut seen, libc::WEXITED | libc::WNOWAIT) };
+        let _ = exit.send(watched == 0);
     });
     let status = match awaited(&exited, ceiling) {
-        Ok(status) => status,
+        Ok(()) => {
+            // Bounded, because the write end outlives the agent wherever it left something running that inherited it: a wait for a pipe a third party holds open is a wait with no end, and this exists to impose one. One deadline covers both, so a holder on each pipe costs the grace once. At EOF, which is the normal case, both return at once.
+            let by = Instant::now() + SETTLING;
+            settled(&read_out, by);
+            settled(&read_err, by);
+            // The review is over the moment its reviewer answers, so nothing it started outlives it. A helper left running holds the repo's claim, which it inherited and cannot be asked to give back, and a repo no command can enter is worse than the race the claim prevents.
+            kill(pid);
+            let ended = child.wait();
+            crate::signals::done();
+            ended.map_err(|e| format!("the reviewer did not finish: {e}"))?
+        }
         Err(Unanswered::Lost) => {
+            // The watcher could not see the child at all, and this run is about to stop reporting on it: left alone it would hold the repo with nobody watching the ceiling that was supposed to end it.
+            kill(pid);
+            let _ = child.wait();
+            crate::signals::done();
             return Err(with_noise(
                 "the reviewer did not finish, and this side lost track of it",
                 &text_of(&err),
-            ))
+            ));
         }
         Err(Unanswered::Ceiling) => {
             kill(pid);
+            let _ = child.wait();
+            crate::signals::done();
             // Nothing is waited for on this path: an agent killed at the ceiling leaves threads blocked on a prompt it never read and on pipes whatever it spawned still holds open, and this run has a refusal to deliver now. What it had managed to say is in the shared buffer, which is worth more than the timeout alone.
             let mut said = format!(
             "the reviewer ran {}s without answering and was killed at the {}s ceiling.\nRaise it with --timeout <minutes> if a review here is genuinely this long; otherwise this is an agent that has stopped rather than one that is thinking.",
@@ -313,10 +349,6 @@ fn piped(
             return Err(with_noise(&said, &text_of(&err)));
         }
     };
-    // Bounded, because the write end outlives the agent wherever it left something running that inherited it: a wait for a pipe a third party holds open is a wait with no end, and this exists to impose one. One deadline covers both, so a holder on each pipe costs the grace once. At EOF, which is the normal case, both return at once.
-    let by = Instant::now() + SETTLING;
-    settled(&read_out, by);
-    settled(&read_err, by);
     let said = Said {
         out: text_of(&out),
         err: text_of(&err),

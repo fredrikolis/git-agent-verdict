@@ -115,9 +115,10 @@ impl Repo {
         self.capture_at(&cwd, args)
     }
 
-    // The shell's directory and the repo under test, told apart: this repo's stub reviewer stays on PATH wherever the caller is standing, so no test can reach a real agent by wandering off.
-    pub fn capture_at(&self, cwd: &Path, args: &[&str]) -> Run {
-        let out = Command::new(BIN)
+    // The isolation every run of the binary gets, in one place: a test that assembles its own command keeps whatever was true when it was written, and reaches the host's git config or a real agent once this changes. The shell's directory and the repo under test stay told apart, so the stub reviewer is on PATH wherever the caller is standing.
+    fn sealed(&self, cwd: &Path, args: &[&str]) -> Command {
+        let mut command = Command::new(BIN);
+        command
             .current_dir(cwd)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
@@ -132,14 +133,26 @@ impl Repo {
                     std::env::var("PATH").unwrap_or_default()
                 ),
             )
-            .args(args)
-            .output()
-            .expect("binary runs");
+            .args(args);
+        command
+    }
+
+    pub fn capture_at(&self, cwd: &Path, args: &[&str]) -> Run {
+        let out = self.sealed(cwd, args).output().expect("binary runs");
         Run {
             code: out.status.code().expect("exited"),
             out: String::from_utf8_lossy(&out.stdout).into_owned(),
             err: String::from_utf8_lossy(&out.stderr).into_owned(),
         }
+    }
+
+    // Left running, so a test can act on it while it works: its stderr is kept because what a run says on its way out is the whole subject of those tests.
+    pub fn running(&self, args: &[&str]) -> std::process::Child {
+        self.sealed(&self.dir, args)
+            .stderr(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .expect("binary runs")
     }
 
     pub fn run(&self, msg: &str, args: &[&str]) -> (i32, String) {
@@ -242,6 +255,7 @@ done
 echo "$assigned" >> assigned-sessions
 export AGENT_VERDICT_SYSTEM="$system" AGENT_VERDICT_PRIOR_SESSION="$resume" AGENT_VERDICT_MODE="$mode"
 if grep -q "You judge one line of text" "$system" 2>/dev/null; then
+  [ -f slow-judge ] && echo $$ > judging && sleep 30
   text=$(cat judge-answer 2>/dev/null || echo "VERDICT: accepted")
 else
   echo "[$model]" >> asked-model
@@ -380,4 +394,29 @@ impl Drop for Repo {
         let _ = std::fs::remove_dir_all(self.home());
         let _ = std::fs::remove_dir_all(self.dir.with_extension("outside"));
     }
+}
+
+// A pipe a stub opens when it reaches the moment a test is about to act on. Opening it blocks on the other side, so the two meet rather than one of them guessing when the other arrived.
+pub fn pipe(at: &std::path::Path) -> std::path::PathBuf {
+    let _ = std::fs::remove_file(at);
+    let made = std::process::Command::new("mkfifo")
+        .arg(at)
+        .status()
+        .expect("mkfifo runs");
+    assert!(made.success(), "could not make {}", at.display());
+    at.to_path_buf()
+}
+
+// Whatever the far end wrote when it got there, which is how a test names the process it is about to make assertions on. The read blocks until that end opens, and the deadline is on a channel rather than on the read: a run that dies before reaching that moment leaves nobody to open the pipe, and the test has to fail rather than hang.
+pub fn arrived_at(pipe: &std::path::Path) -> Option<String> {
+    let (told, arrival) = std::sync::mpsc::channel();
+    let path = pipe.to_path_buf();
+    std::thread::spawn(move || {
+        let _ = told.send(std::fs::read_to_string(path).ok());
+    });
+    arrival
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .ok()
+        .flatten()
+        .map(|said| said.trim().to_string())
 }

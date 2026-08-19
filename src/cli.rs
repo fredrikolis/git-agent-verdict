@@ -3,7 +3,7 @@
 pub const USAGE: &str = concat!(
     "usage: git-agent-verdict <msg-file> <gate> [--simple] [--read-only] [--model <name>]\n",
     "                         [--override-prompt <path>]\n",
-    "                         (--standard <name> | --doc <path> | --rule <text>)...\n",
+    "                         (--standard <name> | --doc <path> | --rule <text>|-)...\n",
     "                         --path <pathspec>...\n",
     "       git-agent-verdict attest --repo <abs path> [--intent <one line>]\n",
     "                                [--timeout <minutes, default 30; or 90s, 45m, 2h>]\n",
@@ -111,15 +111,22 @@ fn gate_name(name: &str) -> Result<String, String> {
     Ok(name.to_string())
 }
 
-// A measure short enough to state in the hook, rather than a file the reviewer must open. It travels the declaration listing, which is tab-separated and line-based, so it is one line of its own.
+// A measure stated in the hook rather than in a file the reviewer must open. Multi-line, and `-` reads stdin, so a rubric a command prints arrives whole at any size: the declaration listing escapes what would otherwise split a gate across lines.
 fn rule(text: String) -> Result<String, String> {
     if text.trim().is_empty() {
         return Err("--rule is empty".to_string());
     }
-    if text.contains('\n') || text.contains('\t') {
-        return Err("--rule is one line, and carries no tab".to_string());
-    }
     Ok(text)
+}
+
+// Read whole, because a heredoc arrives as a stream and a rubric is not complete until it ends.
+fn from_stdin() -> Result<String, String> {
+    use std::io::Read;
+    let mut text = String::new();
+    std::io::stdin()
+        .read_to_string(&mut text)
+        .map_err(|e| format!("--rule -: cannot read stdin: {e}"))?;
+    rule(text)
 }
 
 fn canonical_docs(docs: &[String]) -> Result<Vec<String>, String> {
@@ -197,9 +204,15 @@ fn collect(args: impl Iterator<Item = String>) -> Result<Parsed, String> {
                 p.standards.push(name);
             }
             "--doc" => p.docs.push(args.next().ok_or("--doc needs a path")?),
-            "--rule" => p
-                .rules
-                .push(rule(args.next().ok_or("--rule needs a line of text")?)?),
+            // `-` is the whole point of a heredoc: a rubric a command prints can be any size, and argv cannot.
+            "--rule" => {
+                let text = args.next().ok_or("--rule needs text, or - to read stdin")?;
+                p.rules.push(if text == "-" {
+                    from_stdin()?
+                } else {
+                    rule(text)?
+                });
+            }
             "--path" => p.paths.push(args.next().ok_or("--path needs a pathspec")?),
             flag if flag.starts_with('-') => return Err(format!("unknown flag '{flag}'")),
             value => p.positional.push(value.to_string()),

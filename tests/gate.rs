@@ -533,3 +533,54 @@ fn a_normal_gate_still_offers_its_reviewer_a_sandbox() {
     assert!(run.out.contains("copy the repo to a temp"), "{}", run.out);
     assert!(!run.out.contains("cannot write anywhere"), "{}", run.out);
 }
+
+// `--rule "$(some-command)"` is how a gate borrows a rubric a tool already prints. The listing is line-based, so the text has to survive a round trip through it.
+#[test]
+fn a_rule_carries_the_multiline_output_of_a_command() {
+    let repo = Repo::new();
+    // The hook builds the rule the way an author would: from a command that prints several lines.
+    let generated = concat!(
+        r#""$1" gen --rule "$(printf 'first line\nsecond\tline\nthird')" --path .; "#,
+        r#"true"#
+    );
+    repo.declare(
+        "VERDICT: reviewer=fake session=s-1 major=0 moderate=0 minor=0",
+        &[generated],
+    );
+    repo.stage(&["src.rs"]);
+    let run = repo.capture(&["--reviewer-prompt", "gen"]);
+    assert_eq!(run.code, 0, "{}", run.err);
+    // Whole, and still one gate: a raw newline would have split the declaration and lost everything after it.
+    assert!(
+        run.out.contains("first line\nsecond\tline\nthird"),
+        "{}",
+        run.out
+    );
+    assert!(run.out.contains("<inline-rule-1>"), "{}", run.out);
+}
+
+// argv is capped and a file goes stale, so a rubric a command prints arrives on stdin instead.
+#[test]
+fn a_rule_reads_stdin_so_a_commands_output_has_no_size_limit() {
+    let repo = Repo::new();
+    // Over the 128 KiB per-argument cap: as an argument this would fail the exec outright.
+    let big = "x".repeat(200_000);
+    let heredoc = format!("\"$1\" gen --rule - --path . <<'RULE'\nfirst\nsecond\n{big}\nRULE");
+    repo.declare(
+        "VERDICT: reviewer=fake session=s-1 major=0 moderate=0 minor=0",
+        &[&heredoc],
+    );
+    repo.stage(&["src.rs"]);
+    let run = repo.capture(&["--reviewer-prompt", "gen"]);
+    assert_eq!(run.code, 0, "{}", run.err);
+    assert!(
+        run.out.contains("<inline-rule-1>first\nsecond\n"),
+        "{}",
+        &run.out[..run.out.len().min(400)]
+    );
+    assert!(
+        run.out.len() > 200_000,
+        "the rule was truncated: {}",
+        run.out.len()
+    );
+}

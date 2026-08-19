@@ -25,7 +25,12 @@ fn sweep(
         session.id(),
         crate::agent::transcript_path(session.id()).as_deref(),
     );
-    let answer = agent.run(
+    crate::signals::say(&format!(
+        "while reviewing {}, session {}.",
+        declaration.gate,
+        session.id()
+    ));
+    let answered = agent.run(
         crate::agent::Role::Review,
         &system,
         &crate::brief::sweeping(),
@@ -35,7 +40,10 @@ fn sweep(
             ceiling,
             read_only: declaration.read_only,
         },
-    )?;
+    );
+    // Dropped before the answer is judged, and before a failure is carried out: an audit reports a failed gate and keeps going, so a sentence left armed here would name a review that is already over.
+    crate::signals::quiet();
+    let answer = answered?;
     let verdicts = runner::verdicts(&answer, declaration.brief.simple)?;
     Ok((verdicts, runner::findings(&answer.text)))
 }

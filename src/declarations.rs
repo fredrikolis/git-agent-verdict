@@ -32,16 +32,47 @@ pub fn emit_gate(inv: &Invocation) {
         fields.push("read-only".to_string());
     }
     if let Some(model) = &inv.model {
-        fields.push(format!("model={model}"));
+        fields.push(format!("model={}", escaped(model)));
     }
     if let Some(path) = &inv.brief.prompt {
-        fields.push(format!("prompt={path}"));
+        fields.push(format!("prompt={}", escaped(path)));
     }
-    fields.extend(inv.standards.iter().map(|s| format!("standard={s}")));
-    fields.extend(inv.docs.iter().map(|d| format!("doc={d}")));
-    fields.extend(inv.rules.iter().map(|r| format!("rule={r}")));
-    fields.extend(inv.paths.iter().map(|p| format!("path={p}")));
+    fields.extend(
+        inv.standards
+            .iter()
+            .map(|s| format!("standard={}", escaped(s))),
+    );
+    fields.extend(inv.docs.iter().map(|d| format!("doc={}", escaped(d))));
+    fields.extend(inv.rules.iter().map(|r| format!("rule={}", escaped(r))));
+    fields.extend(inv.paths.iter().map(|p| format!("path={}", escaped(p))));
     println!("{}", fields.join("\t"));
+}
+
+// The listing is one gate per line with tab-separated fields, so a value carrying either would split into a gate this tool cannot read back. Every value goes through it, not only the one that usually carries a newline: a path or a prompt holding a tab is rarer and reads back exactly as wrong.
+fn escaped(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+}
+
+fn unescaped(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some('t') => out.push('\t'),
+            Some(other) => out.push(other),
+            None => out.push('\\'),
+        }
+    }
+    out
 }
 
 fn read_gate(gate: &str, fields: std::str::Split<'_, char>) -> Option<Declaration> {
@@ -57,17 +88,17 @@ fn read_gate(gate: &str, fields: std::str::Split<'_, char>) -> Option<Declaratio
     };
     for field in fields {
         if let Some(name) = field.strip_prefix("standard=") {
-            declaration.standards.push(name.to_string());
+            declaration.standards.push(unescaped(name));
         } else if let Some(doc) = field.strip_prefix("doc=") {
-            declaration.docs.push(doc.to_string());
+            declaration.docs.push(unescaped(doc));
         } else if let Some(text) = field.strip_prefix("rule=") {
-            declaration.rules.push(text.to_string());
+            declaration.rules.push(unescaped(text));
         } else if let Some(path) = field.strip_prefix("path=") {
-            declaration.paths.push(path.to_string());
+            declaration.paths.push(unescaped(path));
         } else if let Some(name) = field.strip_prefix("model=") {
-            declaration.model = Some(name.to_string());
+            declaration.model = Some(unescaped(name));
         } else if let Some(path) = field.strip_prefix("prompt=") {
-            declaration.brief.prompt = Some(path.to_string());
+            declaration.brief.prompt = Some(unescaped(path));
         } else if field == "read-only" {
             declaration.read_only = true;
         } else if field == "simple" {

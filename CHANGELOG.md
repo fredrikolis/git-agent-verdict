@@ -4,6 +4,17 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [1.15.0] - 2026-08-18
+
+### Added
+- `--rule -` reads the rubric from stdin, so a generated one is not capped by argv.
+- A killed run says which signal ended it, and names the round it was in.
+- The reviewer inherits the repo's claim, so a review outliving its run still holds it.
+
+### Changed
+- The claim is a kernel lock, not a pid in a file. A refusal names what holds it.
+- Every field of a gate's listing is escaped, so any of them may carry a tab.
+
 ## [1.14.0] - 2026-08-18
 
 ### Added
