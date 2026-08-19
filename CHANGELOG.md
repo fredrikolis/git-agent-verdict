@@ -4,6 +4,13 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [1.15.1] - 2026-08-19
+
+### Fixed
+- A killed run names where its review carried on: its pid, and the transcript it writes.
+- The reviewer's liveness is asked, not assumed. A kill that took it too says so.
+- The sentence a killed run writes is one line, not a line and a fragment under it.
+
 ## [1.15.0] - 2026-08-18
 
 ### Added

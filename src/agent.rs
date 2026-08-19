@@ -299,7 +299,7 @@ fn piped(
     let (read_out, out) = drain(child.stdout.take());
     let (read_err, err) = drain(child.stderr.take());
     let pid = child.id();
-    crate::signals::spawned(role, pid);
+    crate::signals::spawned(role, pid, session);
     let started = Instant::now();
     let (exit, exited) = std::sync::mpsc::channel();
     // Observed without reaping, and reaped only after the group is ended. A leader that has been reaped frees its pid, and with it the group id: signalling that number afterwards would reach whatever the kernel has since given it. Left as a zombie, the leader holds both reserved until this run is finished with them.

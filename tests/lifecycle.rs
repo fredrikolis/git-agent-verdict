@@ -287,8 +287,23 @@ fn a_run_killed_by_a_signal_says_so_and_leaves_its_reviewer_holding_the_claim() 
     assert!(killed.success(), "could not signal the run");
     let out = running.wait_with_output().expect("it exits");
     let said = String::from_utf8_lossy(&out.stderr);
-    assert!(said.contains("killed by SIGTERM"), "{said}");
-    assert!(said.contains("standards"), "{said}");
+    // One line: the round it was in and what that means for it are one sentence, not a sentence and a fragment under it.
+    assert!(
+        said.contains("killed by SIGTERM while reviewing standards, session"),
+        "{said}"
+    );
+    // Where it carried on, not merely that it did: the reviewer survived the run, and a reader told only that a round is resumable has no way to see what it is doing or to end it.
+    assert!(
+        said.contains(&format!(
+            ". The review is still running, detached: pid {reviewer}, holding this repo until it answers."
+        )),
+        "{said}"
+    );
+    assert!(said.contains(" It writes to "), "{said}");
+    assert!(
+        said.contains(" The round is resumable, once it is done or ended.\n"),
+        "{said}"
+    );
     // Died of the signal rather than exiting on a status that stands for it: a supervisor reads the two apart, and this run was killed.
     assert_eq!(
         std::os::unix::process::ExitStatusExt::signal(&out.status),

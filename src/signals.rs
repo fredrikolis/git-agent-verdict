@@ -12,6 +12,10 @@ static REVIEWING: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::n
 // The judge's, ended by any of them: it holds nothing, its one answer is read by this run alone, and left behind it would spend a ceiling nobody is watching.
 static JUDGING: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
+// Where the review carries on once this run is gone: its pid, its transcript, and what it is holding. Rendered at the spawn, because a handler cannot ask any of it and the reader is otherwise told a round survived without being told where.
+static LEFT: AtomicPtr<u8> = AtomicPtr::new(std::ptr::null_mut());
+static LEFT_LENGTH: AtomicUsize = AtomicUsize::new(0);
+
 // Leaked deliberately: the handler reads these when nothing may be freed, and one run sets each a handful of times.
 fn park(bytes: Vec<u8>) -> *mut u8 {
     Box::into_raw(bytes.into_boxed_slice()).cast()
@@ -44,9 +48,22 @@ extern "C" fn dying(signal: i32) {
     if ended {
         unsafe { libc::kill(-reviewing, libc::SIGKILL) };
     }
+    // Answered rather than assumed: a kill delivered to the whole tree takes the reviewer too, and telling a reader to go and find a pid that died with this run sends them after nothing. Signal 0 asks the kernel whether it is still there, which is one of the few questions a handler may ask.
+    let left = LEFT.load(Ordering::Acquire);
+    let left_length = LEFT_LENGTH.load(Ordering::Relaxed);
+    let carrying_on = !ended
+        && reviewing > 0
+        && !left.is_null()
+        && left_length > 0
+        && unsafe { libc::kill(reviewing, 0) } == 0;
+    if carrying_on {
+        say(b" ");
+        unsafe { libc::write(2, left.cast(), left_length) };
+    }
     // One of them and never both: a run that says nothing stopped its review and then says it ended it has told the reader two different things about the same round.
-    say(match (round, ended) {
-        (_, true) => b" The reviewer was ended with it.\n",
+    say(match (round, ended || carrying_on) {
+        (_, true) if ended => b" The reviewer was ended with it.\n",
+        (_, true) => b"\n",
         (true, false) => b" Nothing here stopped it; the round is resumable.\n",
         (false, false) => b"\n",
     });
@@ -70,10 +87,9 @@ pub fn arm() {
     }
 }
 
-// What this run will say if it is killed from here on. Rendered now, written verbatim then.
+// What this run will say if it is killed from here on. Rendered now, written verbatim then, and never ended: the handler joins it to what comes before and after, and a line broken here breaks the sentence in two.
 pub fn say(text: &str) {
-    let mut bytes = text.as_bytes().to_vec();
-    bytes.push(b'\n');
+    let bytes = text.as_bytes().to_vec();
     // Published last and read first, so a signal arriving mid-update finds the whole of one sentence or none, never a length describing another buffer.
     WORDS.store(std::ptr::null_mut(), Ordering::Release);
     LENGTH.store(bytes.len(), Ordering::Relaxed);
@@ -85,11 +101,24 @@ pub fn quiet() {
     WORDS.store(std::ptr::null_mut(), Ordering::Release);
 }
 
-// The group an agent leads, which a signal ends or spares by what the agent was asked for.
-pub fn spawned(role: crate::agent::Role, pid: u32) {
+// The group an agent leads, which a signal ends or spares by what the agent was asked for. A review also gets the sentence naming where it will carry on, rendered here because this is where its pid is first known.
+pub fn spawned(role: crate::agent::Role, pid: u32, session: &str) {
     match role {
-        crate::agent::Role::Review => REVIEWING.store(pid as i32, Ordering::Relaxed),
         crate::agent::Role::JudgeIntent => JUDGING.store(pid as i32, Ordering::Relaxed),
+        crate::agent::Role::Review => {
+            REVIEWING.store(pid as i32, Ordering::Relaxed);
+            let mut said = format!(
+                "The review is still running, detached: pid {pid}, holding this repo until it answers."
+            );
+            if let Some(path) = crate::agent::transcript_path(session) {
+                said.push_str(&format!(" It writes to {}.", path.display()));
+            }
+            said.push_str(" The round is resumable, once it is done or ended.");
+            let bytes = said.into_bytes();
+            LEFT.store(std::ptr::null_mut(), Ordering::Release);
+            LEFT_LENGTH.store(bytes.len(), Ordering::Relaxed);
+            LEFT.store(park(bytes), Ordering::Release);
+        }
     }
 }
 
@@ -97,4 +126,5 @@ pub fn spawned(role: crate::agent::Role, pid: u32) {
 pub fn done() {
     REVIEWING.store(0, Ordering::Relaxed);
     JUDGING.store(0, Ordering::Relaxed);
+    LEFT.store(std::ptr::null_mut(), Ordering::Release);
 }
