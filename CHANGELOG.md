@@ -4,6 +4,11 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [2.0.2] - 2026-08-19
+
+### Changed
+- README rewritten for the reader deciding whether to adopt it. No code change.
+
 ## [2.0.1] - 2026-08-20
 
 ### Fixed
