@@ -95,10 +95,10 @@ pub fn flow() {
     eprintln!(
         "\nThis repository mandates `git agent-verdict` for all commits. To commit:\n\n  \
          git agent-verdict attest --repo {here} --intent \"<intent: one line, at most {} characters>\"\n\n\
-         That runs this repository's {}, in declaration order, and stops at the first MAJOR. \
-         MODERATE and MINOR are recorded, not blocking. Address the MAJOR findings and run attest \
-         again with no --intent, until every gate has passed. Then address the remaining MODERATE \
-         and MINOR findings at your discretion and:\n\n  \
+         That reviews this repository's {}, in declaration order, halting at the first MAJOR. \
+         Every MAJOR and MODERATE finding is a required fix; MINOR is at your discretion. Once \
+         they are fixed, run attest again with no --intent (a MAJOR requires the re-review; a \
+         MODERATE does not), until every gate has passed. Then:\n\n  \
          git agent-verdict commit --repo {here}",
         crate::cli::INTENT_LIMIT,
         gate_names()
@@ -420,7 +420,7 @@ pub fn nothing_to_abort() {
 // Not an error: the caller asked for a review, there is none left to run, and the state is exactly what it should be.
 pub fn all_passed() {
     eprintln!(
-        "git-agent-verdict: all gates passed. Address the remaining MODERATE and MINOR findings at your discretion, then:\n  git agent-verdict commit --repo {}",
+        "git-agent-verdict: all gates passed. Every outstanding MODERATE finding is a required fix (no re-review required). MINOR is at your discretion. Then:\n  git agent-verdict commit --repo {}",
         here()
     );
 }

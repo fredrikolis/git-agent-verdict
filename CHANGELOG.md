@@ -4,6 +4,11 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [2.0.4] - 2026-08-20
+
+### Fixed
+- The severity rules the tool states. A MODERATE is a required fix, and only a MAJOR demands a re-review.
+
 ## [2.0.3] - 2026-08-19
 
 ### Added

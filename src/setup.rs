@@ -66,7 +66,8 @@ const GUIDE: &str = r#"CONFIGURING A REPOSITORY — git-agent-verdict
    - `git agent-verdict commit --repo <root>` creates the commit once every gate has passed.
    - The message is composed from --intent; nothing is emitted for the caller to paste.
    - --repo is absolute; the shell's directory is never consulted.
-   - Addressing a review's findings re-opens its gate. Run it again after each fix.
+   - Every MAJOR and MODERATE finding is a required fix; MINOR is at your discretion. A MAJOR
+     requires the re-review (a MODERATE does not).
    - --intent is needed on the first run only.
    - attest starts the review and returns. `await --repo <root>`, then `commit --repo <root>`.
    - `abort --repo <root>` if you need to stop one; verdicts already recorded are kept.
