@@ -83,3 +83,143 @@ jobs:
           cat "$err" >&2
           grep -qE 'already (exists|been uploaded|uploaded)' "$err"
           echo "Version already on crates.io; nothing to do."
+
+  publish-npm:
+    needs: upload-assets
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # mints the short-lived OIDC token trusted publishing needs
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # for `gh release download`
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing landed in npm 11.5.1, and the bundled npm may be older.
+      - run: npm install -g npm@latest && npm --version
+      # Five packages, none of them committed: one per target carrying that target's
+      # binary, and a main package that is a launcher and this repository's README.
+      # npm reads the os, cpu and libc of the optional dependencies and installs the
+      # single one the host matches; the launcher then executes the binary beside it.
+      # No NODE_AUTH_TOKEN: npm publish reads the OIDC id-token itself.
+      - name: Publish to npm
+        run: |
+          set -euo pipefail
+          # The manifest is the one version there is. A tag disagreeing with it would
+          # put a number on npm that no other channel carries.
+          version="$(sed -n '/^\[package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          [ "${GITHUB_REF_NAME#v}" = "$version" ] || { echo "tag $GITHUB_REF_NAME is not Cargo.toml $version" >&2; exit 1; }
+          stage="$(mktemp -d)"
+          main="$stage/git-agent-verdict"
+          mkdir -p "$main/bin"
+
+          for entry in "linux-x64-musl x86_64-unknown-linux-musl linux x64" \
+                       "linux-arm64-musl aarch64-unknown-linux-musl linux arm64" \
+                       "darwin-x64 x86_64-apple-darwin darwin x64" \
+                       "darwin-arm64 aarch64-apple-darwin darwin arm64"; do
+            set -- $entry
+            plat="$1"; target="$2"; os="$3"; cpu="$4"
+            mkdir -p "$stage/$plat"
+            gh release download "$GITHUB_REF_NAME" -p "git-agent-verdict-$target.tar.gz" -O "$stage/$target.tar.gz" --clobber
+            tar -xzf "$stage/$target.tar.gz" -C "$stage/$plat"
+            chmod 755 "$stage/$plat/git-agent-verdict"
+            # Both linux binaries are static musl, so each serves glibc hosts as well.
+            libc=""
+            [ "$os" = linux ] && libc='"libc": ["musl", "glibc"],'
+            # No bin field: the command belongs to the main package, and a second
+            # claim on it would leave the symlink to chance.
+            cat > "$stage/$plat/package.json" <<EOF
+          {
+            "name": "git-agent-verdict-$plat",
+            "version": "$version",
+            "description": "Prebuilt git-agent-verdict binary for $os $cpu. Installed automatically as an optional dependency of git-agent-verdict.",
+            "license": "MIT",
+            "repository": { "type": "git", "url": "git+https://github.com/fredrikolis/git-agent-verdict.git" },
+            "os": ["$os"],
+            "cpu": ["$cpu"],
+            $libc
+            "files": ["git-agent-verdict"]
+          }
+          EOF
+          done
+
+          cat > "$main/package.json" <<EOF
+          {
+            "name": "git-agent-verdict",
+            "version": "$version",
+            "description": "Blocks agents from committing code that does not comply with your organization's standards.",
+            "keywords": ["cli", "git", "hook", "code-review", "agents"],
+            "homepage": "https://github.com/fredrikolis/git-agent-verdict",
+            "repository": { "type": "git", "url": "git+https://github.com/fredrikolis/git-agent-verdict.git" },
+            "license": "MIT",
+            "bin": { "git-agent-verdict": "bin/git-agent-verdict.js" },
+            "files": ["bin/git-agent-verdict.js"],
+            "engines": { "node": ">=18" },
+            "optionalDependencies": {
+              "git-agent-verdict-linux-x64-musl": "$version",
+              "git-agent-verdict-linux-arm64-musl": "$version",
+              "git-agent-verdict-darwin-x64": "$version",
+              "git-agent-verdict-darwin-arm64": "$version"
+            }
+          }
+          EOF
+
+          # The shebang is load-bearing: npm links this file as the command, and git
+          # runs it as the agent-verdict subcommand. There is no postinstall step, so
+          # an install with --ignore-scripts or no network still works.
+          cat > "$main/bin/git-agent-verdict.js" <<'JS'
+          #!/usr/bin/env node
+          "use strict";
+
+          const path = require("path");
+          const { execFileSync } = require("child_process");
+
+          const PACKAGES = {
+            "linux-x64": "git-agent-verdict-linux-x64-musl",
+            "linux-arm64": "git-agent-verdict-linux-arm64-musl",
+            "darwin-x64": "git-agent-verdict-darwin-x64",
+            "darwin-arm64": "git-agent-verdict-darwin-arm64",
+          };
+
+          function fail(message) {
+            process.stderr.write(`git-agent-verdict: ${message}\n`);
+            process.exit(1);
+          }
+
+          const key = `${process.platform}-${process.arch}`;
+          const pkg = PACKAGES[key];
+          if (!pkg) {
+            fail(`no prebuilt binary is published for ${key}: cargo install git-agent-verdict`);
+          }
+
+          let bin;
+          try {
+            bin = path.join(path.dirname(require.resolve(`${pkg}/package.json`)), "git-agent-verdict");
+          } catch (_err) {
+            fail(`the binary for ${key} is missing: npm install -g git-agent-verdict, without --no-optional`);
+          }
+
+          try {
+            execFileSync(bin, process.argv.slice(2), { stdio: "inherit" });
+          } catch (err) {
+            // The binary's own status, which is what a commit-msg hook reads.
+            if (typeof err.status === "number") {
+              process.exit(err.status);
+            }
+            fail(err.signal ? `killed by signal ${err.signal}` : err.message);
+          }
+          JS
+          chmod 755 "$main/bin/git-agent-verdict.js"
+          # The npmjs.com page is this repository's README, copied at publish time so
+          # no second copy of it exists to drift.
+          cp README.md "$main/README.md"
+
+          # The platform packages first: the main package pins them, and npm refuses
+          # an optional dependency at a version that does not exist yet.
+          for plat in linux-x64-musl linux-arm64-musl darwin-x64 darwin-arm64; do
+            npm publish ${NPM_PUBLISH_ARGS:-} "$stage/$plat"
+          done
+          npm publish ${NPM_PUBLISH_ARGS:-} "$main"
