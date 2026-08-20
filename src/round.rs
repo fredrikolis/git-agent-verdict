@@ -273,29 +273,44 @@ fn hung_up() -> Result<(), String> {
         Err(why) if why.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(why) => return Err(format!("cannot open {}: {why}", path.display())),
     };
+    let fd = file.as_raw_fd();
     let mut byte = [0u8; 1];
+    // The non-blocking read only classifies: nothing to read and no writer is an end-of-file, while nothing to read with a writer holding the other end is a review still running.
     loop {
-        let read = unsafe { libc::read(file.as_raw_fd(), byte.as_mut_ptr().cast(), 1) };
+        let read = unsafe { libc::read(fd, byte.as_mut_ptr().cast(), 1) };
         if read == 0 {
             return Ok(());
         }
-        if read < 0 {
-            let why = std::io::Error::last_os_error();
-            match why.kind() {
-                std::io::ErrorKind::WouldBlock => {}
-                std::io::ErrorKind::Interrupted => continue,
-                _ => return Err(format!("cannot read {}: {why}", path.display())),
+        if read > 0 {
+            continue;
+        }
+        match std::io::Error::last_os_error().kind() {
+            std::io::ErrorKind::Interrupted => continue,
+            std::io::ErrorKind::WouldBlock => break,
+            _ => {
+                return Err(format!(
+                    "cannot read {}: {}",
+                    path.display(),
+                    std::io::Error::last_os_error()
+                ))
             }
         }
-        let mut watched = libc::pollfd {
-            fd: file.as_raw_fd(),
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        // No deadline: a round ends when its process does, and that is the event being waited for.
-        if unsafe { libc::poll(&mut watched, 1, -1) } < 0
-            && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted
-        {
+    }
+    // Then a blocking read, which is the wait itself: it returns zero when the last writer closes, on every unix. Nothing polls, and no readiness call has to agree about what a hangup on a pipe means.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK) } < 0 {
+        return Err(format!(
+            "cannot wait on {}: {}",
+            path.display(),
+            std::io::Error::last_os_error()
+        ));
+    }
+    loop {
+        let read = unsafe { libc::read(fd, byte.as_mut_ptr().cast(), 1) };
+        if read == 0 {
+            return Ok(());
+        }
+        if read < 0 && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
             return Err(format!(
                 "cannot wait on {}: {}",
                 path.display(),

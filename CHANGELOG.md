@@ -4,6 +4,11 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [2.0.1] - 2026-08-20
+
+### Fixed
+- await waits with a blocking read. BSD poll does not report a hangup on a FIFO, so it never returned on macos.
+
 ## [2.0.0] - 2026-08-19
 
 ### Changed
