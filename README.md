@@ -25,64 +25,38 @@ The agent finds the tool by hitting it. Nothing has to be read first.
 
 ```console
 $ git commit -am "add retry to the uploader"
-
 git-agent-verdict: error: standards: no reviewable trailer
 
 This repository mandates `git agent-verdict` for all commits. To commit:
 
-  git agent-verdict attest --repo /home/you/proj --intent "<intent: one line, at most 300 characters>"
-
-That runs this repository's 2 gates, `standards` then `annotations`, in declaration order, and stops
-at the first MAJOR. MODERATE and MINOR are recorded, not blocking. Address the MAJOR findings and run
-attest again with no --intent, until every gate has passed. Then address the remaining MODERATE and
-MINOR findings at your discretion and:
-
-  git agent-verdict commit --repo /home/you/proj
+  git agent-verdict attest --repo /home/you/proj --intent "<one line>"
+  ...
 ```
 
 `attest` spawns the review and returns. It never blocks the caller, and it never commits.
 
 ```console
 $ git agent-verdict attest --repo /home/you/proj --intent "retry a failed upload three times"
-
 git-agent-verdict: spawned attestation process (pid 48213)
-/home/you/proj/.git/agent-verdict/9f2c1ab/
 Use `git agent-verdict await --repo /home/you/proj` to wait for it.
-Do not poll with pgrep, sleep or any combination of them: those guards match their own shell and can
-stall for hours. If your harness interrupts the await, run it again.
 ```
 
-`await` is the only waiter. It returns the verdict and lists what every gate wrote.
+`await` is the only waiter. It gives the verdict and what each gate wrote.
 
 ```console
 $ git agent-verdict await --repo /home/you/proj
-
 git-agent-verdict: BLOCKED
 /home/you/proj/.git/agent-verdict/9f2c1ab/
   1-standards.log  # BLOCKED
 address the reported findings, then: git agent-verdict attest --repo /home/you/proj
 ```
 
-The agent reads `1-standards.log`, fixes the MAJOR findings, and attests again. A gate that has
-passed is not re-reviewed.
-
-```console
-$ git agent-verdict await --repo /home/you/proj
-
-git-agent-verdict: PASSED
-/home/you/proj/.git/agent-verdict/9f2c1ab/
-  1-standards.log  # BLOCKED
-  2-standards.log  # PASSED
-  3-annotations.log  # PASSED
-git agent-verdict commit --repo /home/you/proj
-```
-
-Committing is a separate verb, so the findings under a passing verdict are read before anything
-lands. The subject is the intent the reviewers were briefed on.
+The agent fixes the MAJOR findings and attests again. A gate that has passed is not re-reviewed.
+Once all of them have, committing is its own verb, so the findings under a passing verdict are read
+before anything lands.
 
 ```console
 $ git agent-verdict commit --repo /home/you/proj
-
 [main 3f9a1c2] retry a failed upload three times
   Reviewed-standards: reviewer=claude-opus-5 major=0 moderate=2 minor=1 token=1f0c...
   Reviewed-annotations: reviewer=claude-opus-5 major=0 moderate=0 minor=0 token=8ba7...
@@ -99,8 +73,8 @@ Installs as `git agent-verdict`.
 
 ## Configure a repo
 
-Declare one gate per line in `.githooks/commit-msg`, tracked and executable. Line order is review
-order, and the gate name becomes the trailer key.
+Declare one gate per line in the `commit-msg` hook. Line order is review order, and the gate name
+becomes the trailer key.
 
 ```bash
 #!/usr/bin/env bash
@@ -112,6 +86,10 @@ git agent-verdict "$1" standards --model opus \
 
 git agent-verdict "$1" docs --simple --doc docs/house-style.md --path "*.md"
 ```
+
+`.git/hooks/commit-msg` is the standard location and needs no configuration, but git does not track
+it, so each clone and each agent would install its own. To make the gates a property of the repo,
+commit the hook and point git at it:
 
 ```bash
 chmod +x .githooks/commit-msg
