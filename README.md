@@ -2,6 +2,7 @@
 # git-agent-verdict
 
 [![crates.io](https://img.shields.io/crates/v/git-agent-verdict.svg)](https://crates.io/crates/git-agent-verdict)
+[![npm](https://img.shields.io/npm/v/git-agent-verdict.svg)](https://www.npmjs.com/package/git-agent-verdict)
 [![CI](https://github.com/fredrikolis/git-agent-verdict/actions/workflows/ci.yml/badge.svg)](https://github.com/fredrikolis/git-agent-verdict/actions/workflows/ci.yml)
 [![license](https://img.shields.io/crates/l/git-agent-verdict.svg)](LICENSE)
 
