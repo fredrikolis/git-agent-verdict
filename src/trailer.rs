@@ -68,7 +68,7 @@ fn counts_from(slots: [Option<u32>; 3]) -> Result<Counts, String> {
             moderate,
             minor,
         }),
-        _ => Err("counts are major=, moderate= and minor= together".to_string()),
+        _ => Err("major=, moderate= and minor= must all be present".to_string()),
     }
 }
 
@@ -99,7 +99,7 @@ fn read_field(f: &mut Fields, field: &str) -> Result<(), String> {
     };
     // Last-wins would let `major=1 major=0` bury a declared blocker.
     if taken {
-        return Err(format!("{name}= is given more than once"));
+        return Err(format!("{name}= appears more than once"));
     }
     match name {
         "reviewer" => f.reviewer = Some(raw.to_string()),
@@ -127,7 +127,7 @@ fn parse_value(value: &str) -> Result<Verdict, String> {
     let reviewer = fields
         .reviewer
         .filter(|r| !r.is_empty())
-        .ok_or("no reviewer= named")?;
+        .ok_or("no reviewer= field")?;
     let token = fields
         .token
         .filter(|t| !t.is_empty())

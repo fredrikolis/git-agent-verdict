@@ -4,6 +4,38 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [2.0.0] - 2026-08-19
+
+### Changed
+- A review runs in a process of its own and outlives the caller that started it.
+- `attest` starts a review and returns; it no longer commits.
+- One run reviews every gate in declaration order, stopping at the first MAJOR.
+- The lock stops at that process. Nothing a reviewer leaves behind can hold the repository.
+- One directory per commit holds every log a review wrote, numbered as the gates ran.
+- A verb that is told to act names the next command in full.
+
+### Added
+- `await` blocks until the review answers and exits on its verdict.
+- `abort` ends a review; the verdicts earlier gates recorded are kept.
+- `commit` creates the commit once every gate has passed.
+
+### Removed
+- `--confirm-running-in-background-shell-with-long-timeout`, and both foreground refusals.
+
+
+### Changed
+- A review runs in a process of its own and outlives the caller that started it.
+- `attest` and `audit` wait for that round; killing the caller no longer ends it.
+- The claim stops at that process. Nothing a reviewer leaves behind can hold the repo.
+- One directory per round holds every log it wrote, named before the first reviewer runs.
+
+### Added
+- `await` re-attaches to the round a repo has running and exits on what it decided.
+- `abort` ends one, keeping every verdict already earned.
+
+### Removed
+- `--confirm-running-in-background-shell-with-long-timeout`, and both foreground refusals.
+
 ## [1.15.1] - 2026-08-19
 
 ### Fixed

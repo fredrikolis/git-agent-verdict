@@ -10,9 +10,11 @@ mod gate;
 mod git;
 mod lock;
 mod report;
+mod round;
 mod runner;
 mod setup;
 mod signals;
+mod standing;
 mod state;
 mod trailer;
 
@@ -65,11 +67,8 @@ fn reviewer_prompt(want: &str) -> Result<bool, String> {
     let hook = declarations::read()?;
     let declaration = declarations::find(&hook, want)?;
     println!("{}", brief::system(declaration, brief::Reach::Diff)?);
-    println!("──── and on stdin, opening a round ────\n");
-    println!(
-        "{}",
-        brief::opening("<the aim of the change, one flat line>")
-    );
+    println!("──── and on stdin, opening a review ────\n");
+    println!("{}", brief::opening("<the intent of the change, one line>"));
     Ok(true)
 }
 
@@ -95,7 +94,7 @@ fn enter(repo: &str) -> Result<(), String> {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    signals::arm();
+    signals::arm(signals::Posture::Caller);
     at_repo_root();
     // The sole argument, never one of several: scanned across the whole line, a stray --version in a gate's declaration exits 0 and the gate passes having checked nothing.
     if let [only] = args.as_slice() {
@@ -136,19 +135,13 @@ fn main() -> ExitCode {
         // Held across the whole run, and dropped with it: the diary is read, added to and written back, so two runs at once review the same gate, pay for it twice, and the second to finish drops the first's verdict.
         Mode::Attest(repo, intent, ceiling) => (
             "attest",
-            enter(repo).and_then(|()| {
-                let _held = lock::take()?;
-                attest::run(intent.as_deref(), *ceiling)
-            }),
+            enter(repo).and_then(|()| attest::run(intent.as_deref(), *ceiling)),
         ),
         // Held like attest's: one review at a time in a repo, whichever verb is paying for it.
-        Mode::Audit(repo, ceiling) => (
-            "audit",
-            enter(repo).and_then(|()| {
-                let _held = lock::take()?;
-                audit::run(*ceiling)
-            }),
-        ),
+        Mode::Audit(repo, ceiling) => ("audit", enter(repo).and_then(|()| audit::run(*ceiling))),
+        Mode::Await(repo) => ("await", enter(repo).and_then(|()| round::wait())),
+        Mode::Abort(repo) => ("abort", enter(repo).and_then(|()| attest::abandon())),
+        Mode::Commit(repo) => ("commit", enter(repo).and_then(|()| attest::commit())),
         Mode::Reset(repo, reason) => (
             "reset",
             enter(repo).and_then(|()| {

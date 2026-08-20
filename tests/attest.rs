@@ -86,11 +86,13 @@ fn gates_are_reviewed_in_the_order_the_hook_declares_them() {
     let second_gate = r#""$1" ann --doc rubric.md --path ."#;
     repo.declare(CLEAN, &[STANDARDS, second_gate]);
     repo.stage(&["src.rs"]);
-    let first = repo.attest(AIM);
-    assert!(first.out.contains("standards:"), "{}", first.out);
-    let second = repo.again();
-    assert!(second.out.contains("ann:"), "{}", second.out);
-    let message = repo.landed(AIM, 2);
+    let run = repo.attest(AIM);
+    assert_eq!(run.code, 0, "{}", run.err);
+    // The logs are numbered as the gates ran, so the order is in their names.
+    assert!(run.out.contains("1-standards.log"), "{}", run.out);
+    assert!(run.out.contains("2-ann.log"), "{}", run.out);
+    assert_eq!(repo.commit().code, 0);
+    let message = repo.head_message();
     assert!(message.contains("Reviewed-standards:"), "{message}");
     assert!(message.contains("Reviewed-ann:"), "{message}");
 }
@@ -116,7 +118,7 @@ fn an_advisory_reviewer_reporting_a_major_is_refused() {
     repo.stage(&["src.rs"]);
     let run = repo.attest(AIM);
     assert_eq!(run.code, 2, "{}", run.err);
-    assert!(run.err.contains("no MAJOR rung"), "{}", run.err);
+    assert!(run.err.contains("no MAJOR severity"), "{}", run.err);
     assert!(!repo.committed(), "an advisory major committed anyway");
 }
 
@@ -303,7 +305,7 @@ fn a_staged_rubric_still_lets_attest_read_the_hook() {
     repo.stage(&["src.rs", "rubric.md"]);
     let run = repo.attest(AIM);
     assert!(!run.err.contains("declared no gates"), "{}", run.err);
-    assert!(run.err.contains("can never be attested"), "{}", run.err);
+    assert!(run.err.contains("cannot be attested"), "{}", run.err);
     assert!(!repo.committed(), "a rubric commit landed anyway");
 }
 
@@ -316,7 +318,7 @@ fn the_intent_cannot_change_between_gates() {
     repo.attest(AIM);
     let run = repo.attest("something else entirely");
     assert_eq!(run.code, 2, "{}", run.err);
-    assert!(run.err.contains("does not move"), "{}", run.err);
+    assert!(run.err.contains("which is fixed"), "{}", run.err);
 }
 
 // The limit bounds the change, not the prose: an aim needing more than a line is more than one commit.
@@ -327,38 +329,9 @@ fn an_intent_naming_more_than_one_change_is_refused_with_the_remedy() {
     repo.stage(&["src.rs"]);
     let two_changes = "x".repeat(301);
     let root = repo.root();
-    let run = repo.capture(&[
-        "attest",
-        "--repo",
-        &root,
-        "--intent",
-        &two_changes,
-        "--confirm-running-in-background-shell-with-long-timeout",
-    ]);
+    let run = repo.capture(&["attest", "--repo", &root, "--intent", &two_changes]);
     assert_eq!(run.code, 2, "{}", run.err);
     assert!(run.err.contains("commit them separately"), "{}", run.err);
-}
-
-// Undocumented, so the refusal is the only place an agent meets it: a review runs for many minutes, and a foreground shell kills it partway.
-#[test]
-fn attest_refuses_a_run_that_has_not_acknowledged_the_background_shell() {
-    let repo = Repo::new();
-    repo.declare(CLEAN, &[STANDARDS]);
-    repo.stage(&["src.rs"]);
-    let run = repo.capture(&["attest", "--intent", AIM]);
-    assert_eq!(run.code, 2, "{}", run.err);
-    assert!(run.err.contains("BACKGROUND shell"), "{}", run.err);
-    assert!(!repo.committed(), "a foreground attest reviewed anyway");
-}
-
-// Named in no usage line and no guide: an agent that has read either still meets it at the first review, which is when it is worth reading.
-#[test]
-fn the_background_flag_is_documented_nowhere() {
-    let repo = Repo::new();
-    let help = repo.capture(&["--help"]);
-    let guide = repo.capture(&["--repo-setup-guide"]);
-    assert!(!help.out.contains("background"), "{}", help.out);
-    assert!(!guide.out.contains("background"), "{}", guide.out);
 }
 
 // The guard the cap cannot enforce: an aim well under the limit can still argue, and the judge is what catches it — before a review is paid for.
@@ -535,7 +508,7 @@ fn audit_without_the_whole_repo_confirmation_says_what_it_would_have_done() {
     repo.declare(CLEAN, &[STANDARDS]);
     repo.stage(&["src.rs"]);
     let root = repo.root();
-    let run = repo.capture(&["audit", "--repo", &root, common::BACKGROUND]);
+    let run = repo.capture(&["audit", "--repo", &root]);
     assert_eq!(run.code, 2, "{}", run.err);
     assert!(run.err.contains("not the staged diff"), "{}", run.err);
     assert!(run.err.contains("attest"), "{}", run.err);
@@ -560,52 +533,11 @@ fn a_review_names_its_transcript_and_how_to_read_it() {
     repo.stage(&["src.rs"]);
     let run = repo.attest(AIM);
     assert_eq!(run.code, 0, "{}", run.err);
-    assert!(
-        run.out.contains("progress log being appended here:"),
-        "{}",
-        run.out
-    );
+    assert!(run.out.contains("progress log:"), "{}", run.out);
     assert!(run.out.contains(".jsonl"), "{}", run.out);
     // The command, not a digest this tool renders: the transcript's shape is the agent's to change.
     assert!(run.out.contains("latest activity: jq"), "{}", run.out);
     assert!(run.out.contains("tail -5"), "{}", run.out);
-}
-
-// The guard printed one hardcoded attest example whichever verb was run, so an audit's caller was told to run attest, which is a different operation and commits.
-#[test]
-fn audits_foreground_guard_teaches_audit_not_attest() {
-    let repo = Repo::new();
-    repo.declare(CLEAN, &[STANDARDS]);
-    repo.stage(&["src.rs"]);
-    let root = repo.root();
-    let bare = repo.capture(&["audit", "--repo", &root]);
-    assert_eq!(bare.code, 2, "{}", bare.err);
-    // With nothing given, the first thing read is what audit does, not how to run attest.
-    assert!(bare.err.contains("not the staged diff"), "{}", bare.err);
-    // The usage block below carries every verb's flags; what must not appear is a remedy telling this caller to run attest.
-    assert!(
-        !bare.err.contains("git agent-verdict attest --repo"),
-        "{}",
-        bare.err
-    );
-    let shell = repo.capture(&["audit", "--repo", &root, common::WHOLE]);
-    assert_eq!(shell.code, 2, "{}", shell.err);
-    assert!(
-        shell.err.contains("git agent-verdict audit"),
-        "{}",
-        shell.err
-    );
-    assert!(
-        !shell.err.contains("git agent-verdict attest --repo"),
-        "{}",
-        shell.err
-    );
-    assert!(!shell.err.contains("--intent \""), "{}", shell.err);
-    assert!(
-        shell.err.contains("every file each gate reaches"),
-        "{}",
-        shell.err
-    );
 }
 
 // A survey that stops at the first gate whose reviewer failed throws away every gate that answered, and the run had already paid for them.
@@ -662,5 +594,44 @@ fn a_reviewer_is_never_left_in_a_mode_that_could_ask() {
     assert!(
         !seen.lines().any(str::is_empty),
         "a round ran with no mode: {seen}"
+    );
+}
+
+// Two gates and one run: a caller that has to drive the tool gate by gate is one paying a round trip for something the tool already knows.
+#[test]
+fn one_run_reviews_every_gate_the_commit_reaches() {
+    let repo = Repo::new();
+    let second_gate = r#""$1" ann --doc rubric.md --path ."#;
+    repo.declare(CLEAN, &[STANDARDS, second_gate]);
+    repo.stage(&["src.rs"]);
+    let run = repo.attest(AIM);
+    assert_eq!(run.code, 0, "{}", run.err);
+    assert!(run.err.contains("standards:"), "{}", run.err);
+    assert!(run.err.contains("ann:"), "{}", run.err);
+    assert_eq!(repo.commit().code, 0);
+    let message = repo.head_message();
+    assert!(message.contains("Reviewed-standards:"), "{message}");
+    assert!(message.contains("Reviewed-ann:"), "{message}");
+}
+
+// The gates after a MAJOR are reviewing content the author is about to change, so the run stops rather than paying for verdicts on text nobody is keeping.
+#[test]
+fn a_major_stops_the_run_before_the_gates_after_it() {
+    let repo = Repo::new();
+    let counting = concat!(
+        r#"echo "$AGENT_VERDICT_SYSTEM" >> asked; "#,
+        r#"if grep -q "ann" "$AGENT_VERDICT_SYSTEM"; then "#,
+        r#"echo "VERDICT: reviewer=fake session=s major=0 moderate=0 minor=0"; else "#,
+        r#"echo "VERDICT: reviewer=fake session=s major=1 moderate=0 minor=0"; fi"#
+    );
+    let second_gate = r#""$1" ann --doc rubric.md --path ."#;
+    repo.declare_runner(counting, &[STANDARDS, second_gate]);
+    repo.stage(&["src.rs"]);
+    let run = repo.attest(AIM);
+    assert_eq!(run.code, 1, "{}", run.err);
+    assert!(
+        !repo.read("asked").contains("ann"),
+        "{}",
+        repo.read("asked")
     );
 }

@@ -1,4 +1,4 @@
-// Concern: reviewing the repository as it stands against every gate's rubric | Non-concern: what a commit carries, or what a gate refuses at commit time | IO: (hook) -> findings, status
+// Concern: starting a survey of the repository as it stands, and what one sweep reviews | Non-concern: what a commit carries | IO: (hook) -> review
 
 use crate::agent::Session;
 use crate::declarations::{self, Declaration};
@@ -6,11 +6,6 @@ use crate::git;
 use crate::report;
 use crate::runner;
 use crate::trailer::Verdict;
-
-// A gate reaching nothing tracked has no repository to review: its pathspec names files this tree does not carry.
-fn reaches(declaration: &Declaration) -> Result<bool, String> {
-    Ok(!git::tracked(&declaration.paths)?.is_empty())
-}
 
 // Nothing is recorded and nothing is committed. A verdict attests one commit, and there is no commit here — what an audit produces is the list of what the rubric now condemns, which the author acts on by making changes that are attested in the usual way.
 fn sweep(
@@ -48,15 +43,36 @@ fn sweep(
     Ok((verdicts, runner::findings(&answer.text)))
 }
 
-// Every gate in one pass, and it does not stop for anything it finds: an audit is a survey, not a procedure the author works through a step at a time. A gate whose reviewer fails does not take the rest with it either — the run that was going to cost a full review per gate should not throw away the ones that answered. What failed is named at the end, and fails the run there.
+// A gate reaching nothing tracked has no repository to review: its pathspec names files this tree does not carry.
+fn reaches(declaration: &Declaration) -> Result<bool, String> {
+    Ok(!git::tracked(&declaration.paths)?.is_empty())
+}
+
+// A survey is started the way any round is, and waited on by the caller that asked for it.
 pub fn run(ceiling: std::time::Duration) -> Result<bool, String> {
     let hook = declarations::read()?;
+    runner::configured()?;
+    let held = crate::lock::take()?;
+    let started = crate::round::spawn(held, "audit", ceiling, move |round| {
+        sweep_all(&hook, round, ceiling)
+    })?;
+    report::started(&started);
+    Ok(true)
+}
+
+// The round process's half: every gate in one pass, stopping for nothing it finds, because a survey is not a procedure the author works through a step at a time. A gate whose reviewer fails does not take the rest with it; what failed is named at the end, and fails the run there.
+fn sweep_all(
+    hook: &declarations::Hook,
+    round: &crate::round::Round,
+    ceiling: std::time::Duration,
+) -> Result<crate::round::Outcome, String> {
     let agent = runner::configured()?;
     report::auditing(&hook.path);
     let mut blocked = false;
     let mut reviewed = 0;
     let mut failed: Vec<String> = Vec::new();
     for declaration in &hook.gates {
+        round.at_gate(&declaration.gate);
         if !reaches(declaration)? {
             report::skipped(&declaration.gate, &declaration.paths);
             continue;
@@ -65,7 +81,7 @@ pub fn run(ceiling: std::time::Duration) -> Result<bool, String> {
             Ok((verdicts, findings)) => {
                 blocked |= verdicts.iter().any(Verdict::blocks);
                 reviewed += 1;
-                report::audited(&declaration.gate, &verdicts, &findings);
+                report::audited(round.dir(), &declaration.gate, &verdicts, &findings);
             }
             Err(said) => {
                 report::gate_failed(&declaration.gate, &said);
@@ -74,7 +90,7 @@ pub fn run(ceiling: std::time::Duration) -> Result<bool, String> {
         }
     }
     if reviewed == 0 && failed.is_empty() {
-        return Err(format!("{} declared no gate this tree reaches", hook.path));
+        return Err(format!("{} declares no gate matching this tree", hook.path));
     }
     report::audit_done(reviewed, blocked, &failed);
     // Reported as it happened and refused here: a survey that lost a gate is not a survey, and an exit saying otherwise would be a claim about the gate that never ran.
@@ -84,5 +100,9 @@ pub fn run(ceiling: std::time::Duration) -> Result<bool, String> {
             failed.join(", ")
         ));
     }
-    Ok(!blocked)
+    Ok(if blocked {
+        crate::round::Outcome::Blocked
+    } else {
+        crate::round::Outcome::Clean
+    })
 }

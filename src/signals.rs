@@ -1,4 +1,4 @@
-// Concern: what a run says and leaves behind when something outside it kills it | Non-concern: why it was killed, or what it was reviewing | IO: (signal) -> stderr, exit status
+// Concern: what a run says when something kills it, and whether its reviewer dies with it | Non-concern: why it was killed | IO: (signal) -> stderr, exit status
 
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
@@ -12,9 +12,13 @@ static REVIEWING: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::n
 // The judge's, ended by any of them: it holds nothing, its one answer is read by this run alone, and left behind it would spend a ceiling nobody is watching.
 static JUDGING: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
-// Where the review carries on once this run is gone: its pid, its transcript, and what it is holding. Rendered at the spawn, because a handler cannot ask any of it and the reader is otherwise told a round survived without being told where.
-static LEFT: AtomicPtr<u8> = AtomicPtr::new(std::ptr::null_mut());
-static LEFT_LENGTH: AtomicUsize = AtomicUsize::new(0);
+// A round process answers to nobody at a terminal, so any signal it receives was sent on purpose and ends its reviewer with it. A caller's reaper is not on purpose, and leaves the round alone.
+static DELIBERATE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub enum Posture {
+    Caller,
+    Round,
+}
 
 // Leaked deliberately: the handler reads these when nothing may be freed, and one run sets each a handful of times.
 fn park(bytes: Vec<u8>) -> *mut u8 {
@@ -44,27 +48,13 @@ extern "C" fn dying(signal: i32) {
         unsafe { libc::kill(-judging, libc::SIGKILL) };
     }
     let reviewing = REVIEWING.load(Ordering::Relaxed);
-    let ended = signal == libc::SIGINT && reviewing > 0;
+    let ended = (signal == libc::SIGINT || DELIBERATE.load(Ordering::Relaxed)) && reviewing > 0;
     if ended {
         unsafe { libc::kill(-reviewing, libc::SIGKILL) };
     }
-    // Answered rather than assumed: a kill delivered to the whole tree takes the reviewer too, and telling a reader to go and find a pid that died with this run sends them after nothing. Signal 0 asks the kernel whether it is still there, which is one of the few questions a handler may ask.
-    let left = LEFT.load(Ordering::Acquire);
-    let left_length = LEFT_LENGTH.load(Ordering::Relaxed);
-    let carrying_on = !ended
-        && reviewing > 0
-        && !left.is_null()
-        && left_length > 0
-        && unsafe { libc::kill(reviewing, 0) } == 0;
-    if carrying_on {
-        say(b" ");
-        unsafe { libc::write(2, left.cast(), left_length) };
-    }
-    // One of them and never both: a run that says nothing stopped its review and then says it ended it has told the reader two different things about the same round.
-    say(match (round, ended || carrying_on) {
-        (_, true) if ended => b" The reviewer was ended with it.\n",
-        (_, true) => b"\n",
-        (true, false) => b" Nothing here stopped it; the round is resumable.\n",
+    say(match (round, ended) {
+        (_, true) => b" The reviewer was terminated with it.\n",
+        (true, false) => b" The reviewer was not terminated; the review is resumable.\n",
         (false, false) => b"\n",
     });
     // Died rather than exited, because a supervisor tells the two apart and this run was killed. Unblocked first: the signal being handled is held off for as long as the handler runs, so raising it without this only queues one that never arrives. The status is the fallback for a signal that somehow does not land.
@@ -79,7 +69,8 @@ extern "C" fn dying(signal: i32) {
     }
 }
 
-pub fn arm() {
+pub fn arm(posture: Posture) {
+    DELIBERATE.store(matches!(posture, Posture::Round), Ordering::Relaxed);
     for signal in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
         // Through a pointer rather than straight to an integer: the cast clippy refuses is the one that silently takes the wrong thing when a signature moves.
         let handler = dying as extern "C" fn(i32) as *const () as libc::sighandler_t;
@@ -101,24 +92,11 @@ pub fn quiet() {
     WORDS.store(std::ptr::null_mut(), Ordering::Release);
 }
 
-// The group an agent leads, which a signal ends or spares by what the agent was asked for. A review also gets the sentence naming where it will carry on, rendered here because this is where its pid is first known.
-pub fn spawned(role: crate::agent::Role, pid: u32, session: &str) {
+// The group an agent leads, which a signal ends or spares by what the agent was asked for.
+pub fn spawned(role: crate::agent::Role, pid: u32) {
     match role {
         crate::agent::Role::JudgeIntent => JUDGING.store(pid as i32, Ordering::Relaxed),
-        crate::agent::Role::Review => {
-            REVIEWING.store(pid as i32, Ordering::Relaxed);
-            let mut said = format!(
-                "The review is still running, detached: pid {pid}, holding this repo until it answers."
-            );
-            if let Some(path) = crate::agent::transcript_path(session) {
-                said.push_str(&format!(" It writes to {}.", path.display()));
-            }
-            said.push_str(" The round is resumable, once it is done or ended.");
-            let bytes = said.into_bytes();
-            LEFT.store(std::ptr::null_mut(), Ordering::Release);
-            LEFT_LENGTH.store(bytes.len(), Ordering::Relaxed);
-            LEFT.store(park(bytes), Ordering::Release);
-        }
+        crate::agent::Role::Review => REVIEWING.store(pid as i32, Ordering::Relaxed),
     }
 }
 
@@ -126,5 +104,4 @@ pub fn spawned(role: crate::agent::Role, pid: u32, session: &str) {
 pub fn done() {
     REVIEWING.store(0, Ordering::Relaxed);
     JUDGING.store(0, Ordering::Relaxed);
-    LEFT.store(std::ptr::null_mut(), Ordering::Release);
 }

@@ -8,6 +8,9 @@ pub const USAGE: &str = concat!(
     "       git-agent-verdict attest --repo <abs path> [--intent <one line>]\n",
     "                                [--timeout <minutes, default 30; or 90s, 45m, 2h>]\n",
     "       git-agent-verdict audit  --repo <abs path> [--timeout <minutes>]\n",
+    "       git-agent-verdict commit --repo <abs path>\n",
+    "       git-agent-verdict await  --repo <abs path>\n",
+    "       git-agent-verdict abort  --repo <abs path>\n",
     "       git-agent-verdict reset --repo <abs path> <reason>\n",
     "       git-agent-verdict --standards [<name>]\n",
     "       git-agent-verdict --reviewer-prompt <gate>\n",
@@ -15,22 +18,19 @@ pub const USAGE: &str = concat!(
     "       git-agent-verdict --repo-setup-guide"
 );
 
-// Undocumented on purpose, and in no usage line: the refusal below is the only place an agent meets it, which is the moment the reminder is worth anything.
-pub const BACKGROUND: &str = "--confirm-running-in-background-shell-with-long-timeout";
-
-// Undocumented for the same reason as BACKGROUND, and asked for separately: the background shell is a fact about how the command is being run, this is a statement about what the caller means to spend. An agent reaching for `audit` because `attest` refused is exactly the mistake it stops.
+// Undocumented on purpose and in no usage line: the refusal below is the only place an agent meets it, which is the moment the reminder is worth anything. It states what the caller means to spend, and an agent reaching for `audit` because `attest` refused is exactly the mistake it stops.
 pub const WHOLE: &str = "--confirm-reviewing-the-whole-repo-not-a-commit";
 
 // Verbs a dev agent types, as against a declaration a hook carries: mistyping one is not a repo whose wiring has gone stale, so the setup guide would be noise.
 pub fn agent_verb(args: &[String]) -> bool {
     matches!(
         args.first().map(String::as_str),
-        Some("attest" | "audit" | "reset")
+        Some("attest" | "audit" | "await" | "abort" | "commit" | "reset")
     )
 }
 
 // Wide enough for one real change's aim, and narrow enough that two aims will not fit: the reviewer refuses a brief that argues, so this bounds the change rather than the prose.
-const INTENT_LIMIT: usize = 300;
+pub const INTENT_LIMIT: usize = 300;
 
 // Above the longest review anyone has watched finish, and far enough above it that hitting this is evidence of a reviewer that has stopped rather than one that is thinking. A ceiling the tool owns: without one the only thing that ends a hung agent is whatever shell it was started in, which kills it with no elapsed time, no signal and nothing said.
 const REVIEW_CEILING: std::time::Duration = std::time::Duration::from_secs(30 * 60);
@@ -56,7 +56,9 @@ fn ceiling(text: &str) -> Result<std::time::Duration, String> {
     let total = count
         .checked_mul(seconds)
         .filter(|total| *total > 0)
-        .ok_or_else(|| format!("--timeout {text}: a ceiling above zero, and short of forever"))?;
+        .ok_or_else(|| {
+            format!("--timeout {text}: must be greater than zero and must not overflow")
+        })?;
     Ok(std::time::Duration::from_secs(total))
 }
 
@@ -84,6 +86,9 @@ pub enum Mode {
     // The repo comes first because nothing else means anything without it: the verb acts on the tree named here and never on the one the shell is standing in. The ceiling comes last because it is the one field with an answer when the author gives none.
     Attest(String, Option<String>, std::time::Duration),
     Reset(String, String),
+    Await(String),
+    Abort(String),
+    Commit(String),
     // No intent, because there is no commit: an audit reviews the tree against the rubrics and lands nothing.
     Audit(String, std::time::Duration),
     ReviewerPrompt(String),
@@ -153,7 +158,6 @@ struct Parsed {
     intent: Option<String>,
     repo: Option<String>,
     timeout: Option<String>,
-    background: bool,
     whole: bool,
     brief: Brief,
     standards: Vec<String>,
@@ -182,10 +186,7 @@ fn collect(args: impl Iterator<Item = String>) -> Result<Parsed, String> {
             "--timeout" => {
                 p.timeout = Some(args.next().ok_or("--timeout needs a number of minutes")?)
             }
-            "--model" => {
-                p.model = Some(args.next().ok_or("--model needs a model the agent knows")?)
-            }
-            BACKGROUND => p.background = true,
+            "--model" => p.model = Some(args.next().ok_or("--model needs a model name")?),
             WHOLE => p.whole = true,
             "--simple" => p.brief.simple = true,
             "--read-only" => p.read_only = true,
@@ -232,7 +233,6 @@ fn only(detail: &str, p: &Parsed, takes: &[&str]) -> Result<(), String> {
         ("--repo", p.repo.is_some()),
         ("--timeout", p.timeout.is_some()),
         ("--model", p.model.is_some()),
-        (BACKGROUND, p.background),
         (WHOLE, p.whole),
         ("--simple", p.brief.simple),
         ("--read-only", p.read_only),
@@ -263,53 +263,13 @@ fn target(p: &Parsed) -> Result<String, String> {
     };
     if !std::path::Path::new(&path).is_absolute() {
         return Err(format!(
-            "--repo {path}: an absolute path. A relative one is the shell's directory again, under another name."
+            "--repo {path}: must be absolute. A relative path resolves against the shell's directory."
         ));
     }
     Ok(path)
 }
 
-// One text, and the verb it is printed for fills it in. Hardcoded to attest it told an audit's caller to run attest, which is not the same operation: audit reviews every file each gate reaches and lands nothing, attest reviews the staged diff and commits. A remedy copied verbatim has to be the command the reader ran.
-fn foreground(verb: &str, reads: &str, confirmations: &str) -> String {
-    format!(
-        "a review reads every rubric in full and {reads}, and often runs for ten minutes or more.\n\
-         A foreground shell will kill it partway.\n\n\
-         Start it in a BACKGROUND shell with a long timeout, then say so:\n\n  \
-         git agent-verdict {verb} --repo <abs path to the repo root> \\\n{confirmations}\n\n\
-         The flag asserts; it cannot check. It is here because this is worth reading once, and this \
-         is when.\n\nRun it directly — no wait loop. {verb} holds the repo while it runs, and a \
-         second one refuses at once naming what holds it.\n\nLet the shell capture what it prints; \
-         do not redirect it to a file. Under a redirect a run that is killed leaves an empty capture \
-         and a truncated log, and the reviewer's own error — the one worth reading — is in neither."
-    )
-}
-
-fn attest_foreground() -> String {
-    let mut said = foreground(
-        "attest",
-        "the whole staged diff",
-        "    --intent \"<the aim, one flat line>\" \\\n    --confirm-running-in-background-shell-with-long-timeout",
-    );
-    said.push_str(
-        "\n\nA killed run is usually not lost work: the reviewer's session is named before it \
-         starts, and the next attest takes up the round where it stopped — where that reviewer had \
-         got far enough to leave a transcript behind.",
-    );
-    said
-}
-
-fn audit_foreground() -> String {
-    foreground(
-        "audit",
-        "every file each gate reaches",
-        "    --confirm-reviewing-the-whole-repo-not-a-commit \\\n    --confirm-running-in-background-shell-with-long-timeout",
-    )
-}
-
 fn attest(p: &Parsed) -> Result<Mode, String> {
-    if !p.background {
-        return Err(attest_foreground());
-    }
     let repo = target(p)?;
     let ceiling = match &p.timeout {
         Some(text) => ceiling(text)?,
@@ -319,14 +279,14 @@ fn attest(p: &Parsed) -> Result<Mode, String> {
         only(
             "attest takes --repo, --intent and --timeout only: what each gate reviews comes from the commit-msg hook",
             p,
-            &["--repo", "--timeout", "<positional>", BACKGROUND],
+            &["--repo", "--timeout", "<positional>"],
         )?;
         return Ok(Mode::Attest(repo, None, ceiling));
     };
     // An aim that will not fit is usually two aims: the limit is a decomposition check as much as a brevity one.
     if intent.contains('\n') || intent.chars().count() > INTENT_LIMIT {
         let detail = format!(
-            "--intent: one line, at most {INTENT_LIMIT} characters, stating the aim as a spec would.\nAn aim that will not fit is more than one change — commit them separately."
+            "--intent: one line, at most {INTENT_LIMIT} characters, stating what the change does.\nAn intent that does not fit describes more than one change; commit them separately."
         );
         return Err(detail);
     }
@@ -336,33 +296,22 @@ fn attest(p: &Parsed) -> Result<Mode, String> {
     only(
         "attest takes --repo, --intent and --timeout only: what each gate reviews comes from the commit-msg hook",
         p,
-        &[
-            "--intent",
-            "--repo",
-            "--timeout",
-            "<positional>",
-            BACKGROUND,
-        ],
+        &["--intent", "--repo", "--timeout", "<positional>"],
     )?;
     Ok(Mode::Attest(repo, Some(intent), ceiling))
 }
 
 // Said in full at the one moment it is worth reading: an agent that reached for this verb because attest refused it needs the difference between them, not a flag name.
 const NOT_A_COMMIT: &str = "audit reviews every file each gate reaches, not the staged diff. \
-One full review per gate, and it lands nothing.\n\nUse it after a rubric changed, to find what the \
-new wording condemns in code nobody is touching. Normal development is attested from the diff: that \
-is what `attest` is for, and it is what the hook demands at commit time.\n\nIf that is what you mean, \
-say so:\n\n  git agent-verdict audit --repo <abs path to the repo root> \\\n    \
---confirm-reviewing-the-whole-repo-not-a-commit \\\n    \
---confirm-running-in-background-shell-with-long-timeout";
+One full review per gate, and it lands nothing.\n\nUse it after a standard changes, to find what the \
+new criteria reject in code no commit is modifying. Normal development is attested from the diff: that \
+is what `attest` is for, and it is what the hook demands at commit time.\n\nTo confirm:\n\n  git agent-verdict audit --repo <abs path to the repo root> \\\n    \
+--confirm-reviewing-the-whole-repo-not-a-commit";
 
 fn audit(p: &Parsed) -> Result<Mode, String> {
-    // Asked before the background shell is: what this verb does differently is the thing a caller reaching for it by mistake needs first, and a guard that teaches the shell first teaches it about a run it should not be making.
+    // What this verb does differently is the thing a caller reaching for it by mistake needs first.
     if !p.whole {
         return Err(NOT_A_COMMIT.to_string());
-    }
-    if !p.background {
-        return Err(audit_foreground());
     }
     let repo = target(p)?;
     let ceiling = match &p.timeout {
@@ -372,9 +321,40 @@ fn audit(p: &Parsed) -> Result<Mode, String> {
     only(
         "audit takes --repo and --timeout only: what each gate reviews comes from the commit-msg hook, and there is no intent because there is no commit",
         p,
-        &["--repo", "--timeout", "<positional>", BACKGROUND, WHOLE],
+        &["--repo", "--timeout", "<positional>", WHOLE],
     )?;
     Ok(Mode::Audit(repo, ceiling))
+}
+
+// Neither spends anything, so neither takes a ceiling, a model or a rubric: one waits for a round, the other ends it.
+fn waiting(p: &Parsed) -> Result<Mode, String> {
+    let repo = target(p)?;
+    only(
+        "await takes --repo only: it waits for the review running in this repository and reads nothing else",
+        p,
+        &["--repo", "<positional>"],
+    )?;
+    Ok(Mode::Await(repo))
+}
+
+fn landing(p: &Parsed) -> Result<Mode, String> {
+    let repo = target(p)?;
+    only(
+        "commit takes --repo only: it commits exactly what the gates have attested",
+        p,
+        &["--repo", "<positional>"],
+    )?;
+    Ok(Mode::Commit(repo))
+}
+
+fn ending(p: &Parsed) -> Result<Mode, String> {
+    let repo = target(p)?;
+    only(
+        "abort takes --repo only: it terminates the review running in this repository and retains every verdict",
+        p,
+        &["--repo", "<positional>"],
+    )?;
+    Ok(Mode::Abort(repo))
 }
 
 // The reason is the whole point of the verb, so it is required rather than defaulted: an unexplained reset is the one this exists to make visible.
@@ -382,12 +362,10 @@ fn reset(p: &Parsed) -> Result<Mode, String> {
     let repo = target(p)?;
     let reason = p.positional[1..].join(" ");
     if reason.trim().is_empty() {
-        return Err(
-            "reset needs a reason, which is recorded and reaches the commit message".to_string(),
-        );
+        return Err("reset needs a reason; it is recorded in the commit message".to_string());
     }
     only(
-        "reset takes --repo and a reason only: it clears the diary and asks nothing of a gate",
+        "reset takes --repo and a reason only: it clears the recorded verdicts and asks nothing of a gate",
         p,
         &["--repo", "<positional>"],
     )?;
@@ -400,6 +378,9 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Mode, String> {
         Some("attest") => return attest(&p),
         Some("audit") => return audit(&p),
         Some("reset") => return reset(&p),
+        Some("await") => return waiting(&p),
+        Some("abort") => return ending(&p),
+        Some("commit") => return landing(&p),
         _ => {}
     }
     // Answered from the binary alone, outside any repo: what this build carries is a fact about the binary, and a caller asking has not necessarily got a repo yet.
@@ -459,7 +440,7 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Mode, String> {
     let docs = canonical_docs(&p.docs)?;
     if inert(&docs, &p.paths) {
         return Err(format!(
-            "gate '{gate}': every --path names one of its own --doc files, so the only change it could ever review is a change to its own measure — which it cannot judge. It would skip every commit.\nWiden --path past the rubric, or let another gate's --path cover it."
+            "gate '{gate}': every --path names one of its own --doc files, so the only change it could review is a change to its own criteria, which it cannot judge. It would skip every commit.\nExtend --path beyond the criteria files, or let another gate's --path cover them."
         ));
     }
     Ok(Mode::Gate(Box::new(Invocation {

@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-pub const BACKGROUND: &str = "--confirm-running-in-background-shell-with-long-timeout";
 pub const WHOLE: &str = "--confirm-reviewing-the-whole-repo-not-a-commit";
 pub const BIN: &str = env!("CARGO_BIN_EXE_git-agent-verdict");
 static SEQ: AtomicU32 = AtomicU32::new(0);
@@ -178,27 +177,85 @@ impl Repo {
         self.dir.to_string_lossy().into_owned()
     }
 
+    // Started, then awaited: the caller returns as soon as the round is up, so a test that wants a verdict asks the verb that reports one. What the round wrote is folded into both streams, because the round has only one: its stdout and its stderr are the same file, and which a line would have taken had somebody been watching is no longer a fact about anything.
+    fn round(&self, args: &[&str]) -> Run {
+        let started = self.capture(args);
+        if started.code != 0 {
+            return started;
+        }
+        let waited = self.awaited();
+        let said = self.round_logs();
+        Run {
+            code: waited.code,
+            out: format!("{}{}{}", started.out, waited.out, said),
+            err: format!("{}{}{}", started.err, waited.err, said),
+        }
+    }
+
+    pub fn awaited(&self) -> Run {
+        let root = self.root();
+        self.capture(&["await", "--repo", &root])
+    }
+
+    // Started and not awaited, for a test that acts while the round is still running.
+    pub fn capture_attest(&self, intent: &str) -> Run {
+        let root = self.root();
+        self.capture(&["attest", "--repo", &root, "--intent", intent])
+    }
+
+    pub fn commit(&self) -> Run {
+        let root = self.root();
+        self.capture(&["commit", "--repo", &root])
+    }
+
+    pub fn aborted(&self) -> Run {
+        let root = self.root();
+        self.capture(&["abort", "--repo", &root])
+    }
+
+    // Every file the round left, in one string: a caller no longer sees a review happen, so a test reads what it wrote instead.
+    pub fn round_logs(&self) -> String {
+        let Some(at) = self.last_round() else {
+            return String::new();
+        };
+        let Ok(entries) = std::fs::read_dir(at) else {
+            return String::new();
+        };
+        let mut said: Vec<String> = entries
+            .flatten()
+            .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+            .collect();
+        said.sort();
+        said.join("")
+    }
+
+    pub fn last_round(&self) -> Option<PathBuf> {
+        let text = std::fs::read_to_string(self.dir.join(".git/agent-verdict.last")).ok()?;
+        let at = text.trim().to_string();
+        (!at.is_empty()).then(|| PathBuf::from(at))
+    }
+
     // The aim is stated on the first run of a commit and held; every later run simply asks again.
     pub fn attest(&self, intent: &str) -> Run {
         let root = self.root();
-        self.capture(&["attest", "--repo", &root, "--intent", intent, BACKGROUND])
+        self.round(&["attest", "--repo", &root, "--intent", intent])
     }
 
-    // Both confirmations, because the verb demands both: a long-running shell, and that the whole repo is meant.
+    // The whole-repo confirmation, which the verb still demands.
     pub fn audit(&self) -> Run {
         let root = self.root();
-        self.capture(&["audit", "--repo", &root, BACKGROUND, WHOLE])
+        self.round(&["audit", "--repo", &root, WHOLE])
     }
 
     pub fn again(&self) -> Run {
         let root = self.root();
-        self.capture(&["attest", "--repo", &root, BACKGROUND])
+        self.round(&["attest", "--repo", &root])
     }
 
     // A ceiling stated in seconds: proving a hung reviewer is killed must not cost the half hour the default allows.
     pub fn attest_within(&self, intent: &str, ceiling: &str) -> Run {
         let root = self.root();
-        self.capture(&[
+        self.round(&[
             "attest",
             "--repo",
             &root,
@@ -206,7 +263,6 @@ impl Repo {
             intent,
             "--timeout",
             ceiling,
-            BACKGROUND,
         ])
     }
 
@@ -313,16 +369,16 @@ fi
         std::fs::read_to_string(self.dir.join(name)).unwrap_or_default()
     }
 
-    // Run until it stops complaining, which is the whole protocol: the last run has no gate left and commits.
+    // Each gate in turn until attest says there is nothing left, then the verb that lands it.
     pub fn attest_until(&self, intent: &str, rounds: usize) -> Run {
         let mut last = self.attest(intent);
         for _ in 1..rounds {
-            if self.committed() {
+            if last.code != 0 {
                 break;
             }
             last = self.again();
         }
-        last
+        self.commit()
     }
 
     pub fn committed(&self) -> bool {
@@ -348,12 +404,13 @@ fi
     pub fn landed_again(&self, rounds: usize) -> String {
         let mut last = self.again();
         for _ in 1..rounds {
-            if self.committed() {
+            if last.code != 0 {
                 break;
             }
             last = self.again();
         }
-        assert!(self.committed(), "no commit landed: {}", last.err);
+        let last = self.commit();
+        assert_eq!(last.code, 0, "no commit landed: {}", last.err);
         self.head_message()
     }
 

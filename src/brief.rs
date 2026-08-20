@@ -1,4 +1,4 @@
-// Concern: what a gate tells its reviewer — standing instructions, and the line opening one round | Non-concern: what the tool tells its author | IO: (declaration, intent) -> system, prompt
+// Concern: what a gate tells its reviewer — the standing prompt, and the line opening one review | Non-concern: what the tool tells its author | IO: (declaration, intent) -> system, prompt
 
 use crate::declarations::Declaration;
 use crate::runner::MARKER;
@@ -43,7 +43,7 @@ pub fn shipped_names() -> String {
 }
 
 // The whole of what --simple changes: an advisory gate has no MAJOR rung, so the rung is absent rather than shown and annotated away. The tool reports its zero, and the trailer keeps one shape everywhere.
-const LADDER: &str = "MAJOR — blocks the commit, and is reviewed again.
+const SEVERITY: &str = "MAJOR — blocks the commit, and is reviewed again.
   The work is wrong, or has a severe flaw. An incremental fix will not reach the right answer.
 
 MODERATE — must fix, no re-review.
@@ -55,8 +55,8 @@ Grade by what is wrong, not by what the fix costs.
 A MODERATE rounded up to MAJOR sends back work that is already right.
 A MAJOR rounded down to MODERATE leaves a defect nobody has to fix.";
 
-const LADDER_ADVISORY: &str =
-    "This gate has no MAJOR rung. Nothing you report blocks the commit, and there is no re-review.
+const SEVERITY_ADVISORY: &str =
+    "This gate has no MAJOR severity. Nothing you report blocks the commit, and there is no re-review.
 
 MODERATE — must fix, no re-review.
   The outcome is right, the execution is not. The author fixes it. Nobody checks the fix.
@@ -194,10 +194,10 @@ pub fn system(declaration: &Declaration, reach: Reach) -> Result<String, String>
         }
         None => built_in(TEMPLATE),
     };
-    let ladder = if declaration.brief.simple {
-        LADDER_ADVISORY
+    let severity = if declaration.brief.simple {
+        SEVERITY_ADVISORY
     } else {
-        LADDER
+        SEVERITY
     };
     Ok(template
         .replace("{{gate}}", &declaration.gate)
@@ -213,7 +213,7 @@ pub fn system(declaration: &Declaration, reach: Reach) -> Result<String, String>
                 SANDBOX
             },
         )
-        .replace("{{ladder}}", ladder)
+        .replace("{{severity}}", severity)
         .replace("{{marker}}", MARKER)
         .replace("{{shape}}", asked_of(declaration.brief.simple)))
 }
@@ -227,8 +227,8 @@ pub fn opening(intent: &str) -> String {
 
 // No aim, because there is no change to state one for: a tree is reviewed against the rubric as it now reads, and an intent here would be a sentence about a commit nobody is writing.
 pub fn sweeping() -> String {
-    "A rubric this gate judges by has changed. Review the repository as it now stands against it.\n\
-     There is no commit and no diff. Report what the rubric names, and close with your verdict line.\n"
+    "A standard this gate judges by has changed. Review the repository as it now stands against it.\n\
+     There is no commit and no diff. Report what the standard requires, and close with your verdict line.\n"
         .to_string()
 }
 

@@ -1,4 +1,4 @@
-// Concern: the review diary for the commit being written — its place, its tokens, its resets, and the round it has open | Non-concern: running a review, or judging one | IO: (gate, verdicts) -> token
+// Concern: the recorded verdicts for the commit being written — their tokens, its intent, its resets, and the review it has open | Non-concern: running a review | IO: (gate, verdicts) -> token
 
 use crate::git;
 use crate::trailer::{Counts, Verdict};
@@ -9,6 +9,7 @@ const PROGRESS: &str = "progress";
 const INTENT: &str = "intent";
 const RESETS: &str = "resets.log";
 const PENDING: &str = "pending";
+const PROPOSED: &str = "proposed-intent";
 
 // A diary, not a vault: `--no-verify` exists, so nothing here resists an author who means it. What it buys is that a count cannot be edited by accident or read by grep.
 fn digest(bytes: &[u8], seed: u64) -> u64 {
@@ -198,9 +199,28 @@ pub fn intent() -> Result<Option<String>, String> {
     Ok(std::fs::read_to_string(path).ok())
 }
 
-pub fn set_intent(intent: &str) -> Result<(), String> {
-    let path = here()?.join(INTENT);
+// An aim the caller stated and no judge has answered yet. Written before a round is spawned so the round can be killed without the aim being asked for twice, and never read as the aim itself: what a reviewer is briefed against is the accepted one.
+pub fn proposed() -> Result<Option<String>, String> {
+    let path = here()?.join(PROPOSED);
+    Ok(std::fs::read_to_string(path).ok())
+}
+
+pub fn propose(intent: &str) -> Result<(), String> {
+    let path = here()?.join(PROPOSED);
     std::fs::write(&path, intent).map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
+// Accepted, so the proposal has served its purpose; or refused, so it must not be asked again under the same wording.
+pub fn settle_intent(accepted: bool) -> Result<(), String> {
+    let dir = here()?;
+    if accepted {
+        let proposed = std::fs::read_to_string(dir.join(PROPOSED))
+            .map_err(|e| format!("cannot read the proposed intent: {e}"))?;
+        std::fs::write(dir.join(INTENT), proposed)
+            .map_err(|e| format!("cannot write {}: {e}", dir.join(INTENT).display()))?;
+    }
+    let _ = std::fs::remove_file(dir.join(PROPOSED));
+    Ok(())
 }
 
 pub struct Record {

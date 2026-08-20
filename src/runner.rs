@@ -13,7 +13,7 @@ pub const REFUSED: &str = "refused";
 pub fn configured() -> Result<Agent, String> {
     let named = git::config(RUNNER_KEY).ok_or_else(|| {
         format!(
-            "no reviewer configured, and there is no default — unset, this refuses rather than spending on an agent nobody chose:\n  \
+            "no reviewer configured, and there is no default:\n  \
              git config --global {RUNNER_KEY} claude"
         )
     })?;
@@ -37,7 +37,7 @@ pub fn judge(answer: &Answer, intent: &str) -> Result<(), String> {
             if !rest_of.is_empty() {
                 detail.push_str(&format!("\n{rest_of}\n"));
             }
-            detail.push_str("\nState the aim and nothing else: what the change does, flatly.");
+            detail.push_str("\nState the intent only: what the change does.");
             return Err(detail);
         }
         if rest.starts_with("accepted") {
@@ -69,7 +69,7 @@ fn counts_from(fields: &str, simple: bool) -> Result<Counts, String> {
     // An advisory gate is never offered a MAJOR rung, so its reviewer is not asked for the count and the zero is recorded here. Reporting one anyway answers a brief it was not given.
     if simple && found[0].is_some_and(|major| major > 0) {
         return Err(
-            "this gate is advisory and has no MAJOR rung, but its reviewer reported major>0"
+            "this gate is advisory and has no MAJOR severity, but its reviewer reported major>0"
                 .to_string(),
         );
     }

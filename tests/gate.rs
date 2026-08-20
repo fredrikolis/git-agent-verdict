@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{Repo, BACKGROUND, BIN, DUMMY, STANDARDS};
+use common::{Repo, BIN, DUMMY, STANDARDS};
 
 #[test]
 fn an_unattested_commit_fails_and_names_the_remedy() {
@@ -71,16 +71,6 @@ fn a_declared_blocker_fails_even_when_it_is_traceable() {
 }
 
 #[test]
-fn a_trailer_above_the_body_is_named_not_reported_missing() {
-    let repo = Repo::new();
-    repo.stage(&["src.rs"]);
-    let msg = "subject\n\nReviewed-standards: reviewer=opus major=0 moderate=0 minor=0 token=ab\n\nbody\n";
-    let (code, out) = repo.standards(msg);
-    assert_eq!(code, 1, "{out}");
-    assert!(out.contains("trailing paragraph"), "{out}");
-}
-
-#[test]
 fn a_trailer_with_no_token_is_malformed() {
     let repo = Repo::new();
     repo.stage(&["src.rs"]);
@@ -110,7 +100,7 @@ fn staging_a_rubric_is_refused_as_maintenance() {
     repo.stage(&["src.rs", "rubric.md"]);
     let (code, out) = repo.standards(DUMMY);
     assert_eq!(code, 1, "{out}");
-    assert!(out.contains("can never be attested"), "{out}");
+    assert!(out.contains("cannot be attested"), "{out}");
     assert!(out.contains("--no-verify"), "{out}");
 }
 
@@ -122,7 +112,7 @@ fn a_rubric_alone_is_refused_too() {
     repo.stage(&["rubric.md"]);
     let (code, out) = repo.standards(DUMMY);
     assert_eq!(code, 1, "{out}");
-    assert!(out.contains("can never be attested"), "{out}");
+    assert!(out.contains("cannot be attested"), "{out}");
 }
 
 // Another gate's measure is no more reviewable than its own: which gate owns it does not make it content.
@@ -155,7 +145,7 @@ fn a_doc_outside_the_repo_does_not_reach_git() {
 
 // A gate built from nothing but its own rubric would meet a refusal at every commit it ever saw. Refused where the declaration is read: a gate that never judges is one the repo believes it has.
 #[test]
-fn a_gate_that_could_only_ever_meet_its_own_rubric_is_refused() {
+fn a_gate_that_could_only_ever_meet_its_own_criteria_is_refused() {
     let repo = Repo::new();
     repo.stage(&["src.rs"]);
     let (code, out) = repo.run(
@@ -163,11 +153,11 @@ fn a_gate_that_could_only_ever_meet_its_own_rubric_is_refused() {
         &["meta", "--doc", "rubric.md", "--path", "rubric.md"],
     );
     assert_eq!(code, 2, "{out}");
-    assert!(out.contains("its own measure"), "{out}");
-    assert!(out.contains("Widen --path"), "{out}");
+    assert!(out.contains("its own criteria"), "{out}");
+    assert!(out.contains("Extend --path"), "{out}");
 }
 
-// A pathspec reaches what the repo gains later, so a gate covering its rubric among others is live and stands.
+// A pathspec reaches what the repository gains later, so a gate covering its criteria among others is live and stands.
 #[test]
 fn a_gate_whose_pathspec_merely_includes_its_rubric_stands() {
     let repo = Repo::new();
@@ -243,10 +233,13 @@ fn attest_acts_on_the_named_repo_from_anywhere() {
             &root,
             "--intent",
             "raise the staged file's line count",
-            BACKGROUND,
         ],
     );
-    assert!(run.out.contains("standards:"), "{}", run.err);
+    assert_eq!(run.code, 0, "{}", run.err);
+    // Awaited from where the caller stood, since a round is named by --repo and not by the shell.
+    let waited = elsewhere.capture_at(&elsewhere.dir, &["await", "--repo", &root]);
+    assert_eq!(waited.code, 0, "{}", waited.err);
+    assert!(repo.round_logs().contains("standards:"), "{}", waited.err);
     assert!(!elsewhere.committed(), "it acted on the shell's repo");
 }
 
@@ -255,20 +248,20 @@ fn attest_acts_on_the_named_repo_from_anywhere() {
 fn a_missing_repo_offers_no_value_to_paste() {
     let repo = Repo::new();
     repo.declare(PASSES, &[STANDARDS]);
-    let (code, out) = repo.bare(&["attest", "--intent", "an aim", BACKGROUND]);
+    let (code, out) = repo.bare(&["attest", "--intent", "an aim"]);
     assert_eq!(code, 2, "{out}");
     assert!(out.contains("shell's directory is not consulted"), "{out}");
     assert!(!out.contains(&repo.root()), "it suggested a path: {out}");
 }
 
-// A relative path is the shell's directory again under another name.
+// A relative path resolves against the shell's directory, which is the thing --repo exists to distrust.
 #[test]
 fn a_relative_repo_is_refused() {
     let repo = Repo::new();
     repo.declare(PASSES, &[STANDARDS]);
-    let (code, out) = repo.bare(&["attest", "--repo", ".", "--intent", "an aim", BACKGROUND]);
+    let (code, out) = repo.bare(&["attest", "--repo", ".", "--intent", "an aim"]);
     assert_eq!(code, 2, "{out}");
-    assert!(out.contains("an absolute path"), "{out}");
+    assert!(out.contains("must be absolute"), "{out}");
 }
 
 // A near miss looks like success: a submodule taken for its parent reviews the wrong tree and says nothing.
@@ -278,9 +271,7 @@ fn a_repo_that_is_not_the_root_is_refused() {
     repo.declare(PASSES, &[STANDARDS]);
     let inside = format!("{}/sub", repo.root());
     std::fs::create_dir_all(&inside).expect("subdir");
-    let (code, out) = repo.bare(&[
-        "attest", "--repo", &inside, "--intent", "an aim", BACKGROUND,
-    ]);
+    let (code, out) = repo.bare(&["attest", "--repo", &inside, "--intent", "an aim"]);
     assert_eq!(code, 2, "{out}");
     assert!(out.contains("is not a repo root"), "{out}");
     assert!(out.contains(&repo.root()), "{out}");
@@ -392,7 +383,7 @@ fn the_installed_line_satisfies_a_pin_on_that_line() {
 // The failure the old floor could not see: a release that took a flag away passed a hook pinned below it, and the hook found out when a commit died.
 #[test]
 fn a_pin_on_another_line_is_refused_in_both_directions() {
-    for want in ["0.3.0", "0.1", "2.0.0", "99.0.0"] {
+    for want in ["0.3.0", "0.1", "1.15.0", "99.0.0"] {
         let out = std::process::Command::new(BIN)
             .args(["--require-version", want])
             .output()

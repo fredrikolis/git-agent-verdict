@@ -21,7 +21,7 @@ pub enum Session {
 
 impl Session {
     pub fn opened() -> Session {
-        Session::Fresh(assigned())
+        Session::Fresh(fresh_id())
     }
 
     pub fn resumed(id: &str) -> Session {
@@ -55,7 +55,7 @@ impl Agent {
     pub fn named(name: &str) -> Result<Agent, String> {
         if name.trim() != "claude" {
             return Err(format!(
-                "unknown agent '{}': this build knows claude.\n  git config --global agent-verdict.runner claude",
+                "unknown agent '{}': this build supports only 'claude'.\n  git config --global agent-verdict.runner claude",
                 name.trim()
             ));
         }
@@ -90,7 +90,7 @@ fn claude_model(role: Role, asked: Option<&str>) -> Option<&str> {
 }
 
 // Chosen here and handed to the agent, rather than read back out of its answer. The two are the same identifier and a world apart in when they are known: read back, it arrives in the final answer, which is the one thing a run that crashed, hung or was killed never produced — so the id would be available in exactly the cases with nothing to use it for. Assigned first, it is known before anything can go wrong, and the transcript it names can be pointed at when something does.
-fn assigned() -> String {
+pub fn fresh_id() -> String {
     let mut bytes = [0u8; 16];
     // Exactly sixteen bytes, taken by hand: the device never reaches an end, and anything that reads it to one reads for ever.
     let taken =
@@ -283,23 +283,22 @@ fn piped(
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    // The claim rides into the reviewer and no further: a review that outlives the run still holds the repo, which is the point, while a judge that outlived one would hold it for an answer nobody is left to read.
-    if matches!(role, Role::Review) {
-        crate::lock::passed_to(&mut command);
-    }
     let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("cannot run the reviewer: {e}"))?;
-    let mut stdin = child.stdin.take().ok_or("the reviewer took no stdin")?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or("the reviewer's stdin is unavailable")?;
     let text = prompt.to_string();
     let writer = std::thread::spawn(move || stdin.write_all(text.as_bytes()));
     let (read_out, out) = drain(child.stdout.take());
     let (read_err, err) = drain(child.stderr.take());
     let pid = child.id();
-    crate::signals::spawned(role, pid, session);
+    crate::signals::spawned(role, pid);
     let started = Instant::now();
     let (exit, exited) = std::sync::mpsc::channel();
     // Observed without reaping, and reaped only after the group is ended. A leader that has been reaped frees its pid, and with it the group id: signalling that number afterwards would reach whatever the kernel has since given it. Left as a zombie, the leader holds both reserved until this run is finished with them.
@@ -357,7 +356,7 @@ fn piped(
     match writer.join() {
         Err(_) => return Err("the prompt was never written to the reviewer".to_string()),
         Ok(Err(e)) if e.kind() != std::io::ErrorKind::BrokenPipe => {
-            return Err(format!("cannot brief the reviewer: {e}"));
+            return Err(format!("cannot send the prompt to the reviewer: {e}"));
         }
         Ok(_) => {}
     }
@@ -452,10 +451,10 @@ fn read_claude(said: &Said) -> Result<Answer, String> {
     }
     let text = json["result"]
         .as_str()
-        .ok_or_else(|| with_noise("the reviewer's answer carries no result", &said.err))?;
+        .ok_or_else(|| with_noise("the reviewer's answer has no result field", &said.err))?;
     let session = json["session_id"]
         .as_str()
-        .ok_or_else(|| with_noise("the reviewer's answer carries no session_id", &said.err))?;
+        .ok_or_else(|| with_noise("the reviewer's answer has no session_id field", &said.err))?;
     // Which model actually answered, rather than which one was asked for: a fallback would otherwise reach the trailer under the name of the model that never ran.
     let reviewer = json["modelUsage"]
         .as_object()
@@ -471,7 +470,7 @@ fn read_claude(said: &Said) -> Result<Answer, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{assigned, slug};
+    use super::slug;
 
     // Checked against a directory the agent has really keyed a transcript on: /home/me/src/my_test.dir v2 becomes -home-me-src-my-test-dir-v2, so a dot, an underscore and a space are hyphens exactly as a separator is.
     #[test]
@@ -487,22 +486,4 @@ mod tests {
     }
 
     // The flag takes a uuid and refuses what is merely uuid-shaped, and two rounds must never be handed one id.
-    #[test]
-    fn an_assigned_session_is_a_version_four_uuid_and_is_not_reused() {
-        let id = assigned();
-        let fields: Vec<&str> = id.split('-').collect();
-        assert_eq!(fields.len(), 5, "{id}");
-        assert_eq!(
-            fields.iter().map(|f| f.len()).collect::<Vec<_>>(),
-            vec![8, 4, 4, 4, 12],
-            "{id}"
-        );
-        assert!(
-            id.chars().all(|c| c.is_ascii_hexdigit() || c == '-'),
-            "{id}"
-        );
-        assert!(fields[2].starts_with('4'), "{id} is not version 4");
-        assert!(matches!(&fields[3][..1], "8" | "9" | "a" | "b"), "{id}");
-        assert_ne!(id, assigned());
-    }
 }

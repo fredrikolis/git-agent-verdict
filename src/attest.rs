@@ -1,61 +1,12 @@
-// Concern: driving a commit to a full set of verdicts — which gate runs next | Non-concern: the trailer's grammar, or how a gate is later checked | IO: (intent) -> reviews, commit
+// Concern: starting the review the commit being written needs next, and creating the commit once every gate has passed | Non-concern: conducting a review | IO: (intent) -> review, commit
 
 use crate::declarations::{self, Declaration, Hook};
 use crate::gate;
 use crate::git;
 use crate::report;
+use crate::standing::{applies, latest, next, settled, survey};
 use crate::state;
 use crate::trailer::{self, Verdict};
-
-// A gate with nothing staged is not part of this commit — exactly as the gate itself decides when the hook runs.
-fn applies(declaration: &Declaration) -> Result<bool, String> {
-    Ok(!git::staged(&declaration.paths)?.is_empty())
-}
-
-// The last word on a gate, which is the only one that counts: a re-review supersedes what it was asked to look at again.
-fn latest<'a>(gate: &str, steps: &'a [state::Step]) -> Option<&'a state::Step> {
-    steps.iter().rfind(|s| s.gate == gate)
-}
-
-// MAJOR alone re-opens a gate. Acting on a MODERATE moves content too, and re-reviewing for that resamples advice the author already has — a loop keyed on content never ends.
-fn settled(declaration: &Declaration, steps: &[state::Step]) -> bool {
-    latest(&declaration.gate, steps).is_some_and(|step| !step.blocked)
-}
-
-// Line order is review order, and a later gate must never be judged against content an earlier one is still changing: the position is held here so nothing has to sequence it by hand.
-fn next<'a>(hook: &'a Hook, steps: &[state::Step]) -> Result<Option<&'a Declaration>, String> {
-    for declaration in &hook.gates {
-        if !applies(declaration)? || settled(declaration, steps) {
-            continue;
-        }
-        return Ok(Some(declaration));
-    }
-    Ok(None)
-}
-
-// Every gate this hook declares, and where each one stands: what is left is not a number, because a fix can bring a file into a pathspec that reached nothing before.
-fn survey(hook: &Hook, steps: &[state::Step]) -> Result<Vec<(String, report::Standing)>, String> {
-    let mut board = Vec::new();
-    for declaration in &hook.gates {
-        let gate = declaration.gate.clone();
-        let standing = if !applies(declaration)? {
-            report::Standing::Skipped(declaration.paths.join(", "))
-        } else if let Some(step) = latest(&gate, steps) {
-            let counts = state::lookup(&step.token)?
-                .map(|record| trailer::total(&record.verdicts).render())
-                .unwrap_or_default();
-            if step.blocked {
-                report::Standing::Blocked(counts)
-            } else {
-                report::Standing::Passed(counts)
-            }
-        } else {
-            report::Standing::Waiting
-        };
-        board.push((gate, standing));
-    }
-    Ok(board)
-}
 
 fn session_of(step: &state::Step) -> Option<String> {
     let record = state::lookup(&step.token).ok()??;
@@ -178,7 +129,7 @@ fn trailers(hook: &Hook, steps: &[state::Step]) -> Result<Vec<String>, String> {
             return Err("nothing staged: nothing to review, nothing to commit".to_string());
         }
         return Err(format!(
-            "{} declared no gate this commit reaches",
+            "{} declares no gate matching this commit",
             hook.path
         ));
     }
@@ -200,16 +151,18 @@ fn compose(intent: &str, trailers: &[String], resets: &[String]) -> String {
     message
 }
 
-// Nothing hands a token to anyone: the last run writes the trailers itself, and the hook it triggers verifies them exactly as it would verify a commit made by hand.
-fn land(hook: &Hook, steps: &[state::Step], intent: &str) -> Result<bool, String> {
+// Nothing hands a token to anyone: the last run writes the trailers itself, and the hook it triggers verifies them as it would a commit made by hand. The intent is asked for after them, because an empty index and a hook that matches nothing are both worth saying before a missing intent is.
+fn land(hook: &Hook, steps: &[state::Step], intent: Option<&str>) -> Result<bool, String> {
     let trailers = trailers(hook, steps)?;
-    report::gates(&survey(hook, steps)?);
+    let intent = intent.ok_or("this commit has no accepted intent")?;
+    // No gate table: the trailers carry the same gates and the same counts, and the commit keeps them.
     let message = compose(intent, &trailers, &state::reasons()?);
     let out = git::commit(&message)?;
     report::committed(&trailers, &out);
     Ok(true)
 }
 
+// The caller's half: everything that can refuse before money is spent, then a round it does not wait for.
 pub fn run(asked: Option<&str>, ceiling: std::time::Duration) -> Result<bool, String> {
     let hook = declarations::read()?;
     // Every gate asked at once, before the first review rather than before each: a run that pays for one gate and then refuses at the next has spent the money either way.
@@ -231,18 +184,116 @@ pub fn run(asked: Option<&str>, ceiling: std::time::Duration) -> Result<bool, St
         report::maintenance(&staged_machinery);
         return Ok(false);
     }
+    // Asked before a round is spawned: a host with no reviewer configured is the caller's own wiring, and learning it through await would cost a round to say nothing.
+    crate::runner::configured()?;
+    // A review already running is a refusal, not an answer: this one did not start, and what is running was briefed on whatever was staged then rather than now.
+    let held = crate::lock::take()?;
     let steps = state::progress()?;
     let recorded = state::intent()?;
-    // Stated once, and it does not move: an aim restated is an aim that can drift, and what the first reviewer was briefed against is what the rest are judged by.
-    let intent = match (asked, recorded.as_deref()) {
-        (None, Some(held)) => held.to_string(),
-        (Some(asked), None) => {
+    let proposed = state::proposed()?;
+    // Stated once, and it does not move: an aim restated is an aim that can drift, and what the first reviewer was briefed against is what the rest are judged by. Written down before it is judged, so a round killed mid-answer leaves it neither forgotten nor standing as accepted.
+    match (asked, recorded.as_deref(), proposed.as_deref()) {
+        (Some(_), Some(held), _) => {
+            return Err(format!(
+                "this commit already has an accepted intent, which is fixed:\n  {held}\nattest takes no --intent after the first run."
+            ))
+        }
+        (Some(asked), None, Some(standing)) if standing != asked => {
+            return Err(format!(
+                "this commit already has a proposed intent, which is fixed:\n  {standing}\nRun attest with no --intent, or reset to state another."
+            ))
+        }
+        (Some(asked), None, _) => state::propose(asked)?,
+        (None, None, None) => {
+            return Err("attest needs --intent: no intent is recorded for this commit".to_string())
+        }
+        _ => {}
+    }
+    // Through, and not committed: the findings under a passing verdict are read before they are carried, and the verb that carries them is the author's. Refused rather than shrugged at, because a caller that keeps attesting has not read them — and through is not the same answer as nothing to review, which is what an empty index gives.
+    if next(&hook, &steps)?.is_none() {
+        if git::staged(&[])?.is_empty() {
+            return Err("nothing staged: nothing to review, nothing to commit".to_string());
+        }
+        if !survey(&hook, &steps)?
+            .iter()
+            .any(|(_, standing)| !matches!(standing, report::Standing::Skipped(_)))
+        {
+            return Err(format!(
+                "{} declares no gate matching this commit",
+                hook.path
+            ));
+        }
+        report::what_was_reviewed();
+        report::all_passed();
+        return Ok(true);
+    }
+    let started = crate::round::spawn(held, "attest", ceiling, move |round| {
+        review_all(&hook, round, ceiling)
+    })?;
+    report::started(&started);
+    // Started, and not waited for: a caller that blocks is a caller an agent wraps in a background shell and then polls. The verdict is `await`'s to report.
+    Ok(true)
+}
+
+// Nothing lands by itself. What this refuses is a commit asked for before the gates are through, which is the mistake the flow exists to prevent.
+pub fn commit() -> Result<bool, String> {
+    let hook = declarations::read()?;
+    let held = crate::lock::take()?;
+    let steps = state::progress()?;
+    if let Some(declaration) = next(&hook, &steps)? {
+        report::what_was_reviewed();
+        return Err(report::not_passed(&declaration.gate));
+    }
+    held.describe(&crate::lock::Landed::Landing)?;
+    let landed = land(&hook, &steps, state::intent()?.as_deref());
+    if landed.is_ok() {
+        // The reviews belonged to the commit that just landed. Left behind, the next await would answer for a commit nobody is writing.
+        crate::round::forget_last();
+    }
+    landed
+}
+
+// Ending a round abandons the aim it was judging with it: the next caller states one afresh rather than inheriting one nobody answered.
+pub fn abandon() -> Result<bool, String> {
+    crate::round::abort(|| {
+        state::close_round();
+        let _ = state::settle_intent(false);
+        // The hook is read for the table and nothing else, so a repo that has none still aborts.
+        declarations::read()
+            .and_then(|hook| survey(&hook, &state::progress()?))
+            .unwrap_or_default()
+    })
+}
+
+// Every gate the commit still needs, one after another, stopping at the first that blocks: after a MAJOR the content under the gates behind it is about to change, so reviewing them now buys verdicts on text nobody is keeping.
+fn review_all(
+    hook: &Hook,
+    round: &crate::round::Round,
+    ceiling: std::time::Duration,
+) -> Result<crate::round::Outcome, String> {
+    let intent = accepted_intent(ceiling)?;
+    loop {
+        let steps = state::progress()?;
+        let Some(declaration) = next(hook, &steps)? else {
+            return Ok(crate::round::Outcome::Clean);
+        };
+        if review_one(hook, round, declaration, &steps, &intent, ceiling)? {
+            return Ok(crate::round::Outcome::Blocked);
+        }
+    }
+}
+
+// Judged once for the commit, not once per gate: every reviewer is briefed against the same aim.
+fn accepted_intent(ceiling: std::time::Duration) -> Result<String, String> {
+    let intent = match (state::intent()?, state::proposed()?) {
+        (Some(accepted), _) => accepted,
+        (None, Some(asked)) => {
             let judge = crate::runner::configured()?;
             report::judging();
             let answer = judge.run(
                 crate::agent::Role::JudgeIntent,
                 &crate::brief::judge_system(),
-                &crate::brief::judge_prompt(asked),
+                &crate::brief::judge_prompt(&asked),
                 // Its own session, opened and finished within this one question: there is nothing here worth resuming, and nothing a later round would want from it.
                 &crate::agent::Session::opened(),
                 &crate::agent::Terms {
@@ -251,71 +302,77 @@ pub fn run(asked: Option<&str>, ceiling: std::time::Duration) -> Result<bool, St
                     read_only: false,
                 },
             )?;
-            crate::runner::judge(&answer, asked)?;
-            state::set_intent(asked)?;
-            asked.to_string()
-        }
-        (Some(_), Some(held)) => {
-            return Err(format!(
-                "this commit already states its aim, and it does not move:\n  {held}\nattest takes no --intent after the first run."
-            ))
+            let judged = crate::runner::judge(&answer, &asked);
+            state::settle_intent(judged.is_ok())?;
+            judged?;
+            asked
         }
         (None, None) => {
-            return Err("attest needs --intent: no aim is recorded for this commit yet".to_string())
+            return Err("no intent was recorded for this review to validate".to_string())
         }
     };
-    let intent = intent.as_str();
-    let Some(declaration) = next(&hook, &steps)? else {
-        return land(&hook, &steps, intent);
-    };
+    Ok(intent)
+}
+
+// One gate, and whether it blocked.
+fn review_one(
+    hook: &Hook,
+    round: &crate::round::Round,
+    declaration: &Declaration,
+    steps: &[state::Step],
+    intent: &str,
+    ceiling: std::time::Duration,
+) -> Result<bool, String> {
     let agent = crate::runner::configured()?;
-    let round = round_for(declaration, &steps)?;
-    if matches!(round.opening, Opening::Interrupted) {
+    round.at_gate(&declaration.gate);
+    let opened = round_for(declaration, steps)?;
+    if matches!(opened.opening, Opening::Interrupted) {
         report::resuming(
             &declaration.gate,
-            round.session.id(),
-            crate::agent::last_wrote(round.session.id()),
+            opened.session.id(),
+            crate::agent::last_wrote(opened.session.id()),
         );
     }
     // Built before the marker: a rubric that will not open or a prompt file that is missing is the hook's wiring, and discovering it afterwards would spend an interrupted round's one resume on a fault the reviewer never saw.
-    let (system, prompt) = briefing(declaration, intent, &round)?;
-    // Written down before the reviewer is spawned, which is the whole point of choosing the session here: after this line, a run that dies leaves something naming what it was doing and what to take up.
-    state::open_round(&declaration.gate, round.session.id())?;
+    let (system, prompt) = briefing(declaration, intent, &opened)?;
+    // Written down before the reviewer is spawned: after this line, a round that dies leaves something naming what it was doing and what to take up.
+    state::open_round(&declaration.gate, opened.session.id())?;
     report::reviewing(
         &declaration.gate,
-        round.session.id(),
-        crate::agent::transcript_path(round.session.id()).as_deref(),
+        opened.session.id(),
+        crate::agent::transcript_path(opened.session.id()).as_deref(),
     );
-    // Armed while the round runs and dropped when it ends: a run reaped from outside otherwise says nothing, and a sentence outliving its round names a review that already finished.
     crate::signals::say(&format!(
         "while reviewing {}, session {}.",
         declaration.gate,
-        round.session.id()
+        opened.session.id()
     ));
-    let reviewed = review(declaration, &agent, (&system, &prompt), &round, ceiling);
+    let reviewed = review(declaration, &agent, (&system, &prompt), &opened, ceiling);
     crate::signals::quiet();
     // One attempt at taking a round up. If the resumed reviewer fails too, the session is not one this tool can finish, and every run from here would pay again to learn that.
-    if reviewed.is_err() && matches!(round.opening, Opening::Interrupted) {
+    if reviewed.is_err() && matches!(opened.opening, Opening::Interrupted) {
         state::close_round();
     }
     let (verdicts, findings) = reviewed?;
     let blocked = verdicts.iter().any(Verdict::blocks);
     state::record(&declaration.gate, &verdicts, blocked)?;
     let after = state::progress()?;
-    let remaining = next(&hook, &after)?.map(|d| d.gate.clone());
+    let remaining = next(hook, &after)?.map(|d| d.gate.clone());
     report::reviewed(
+        round.dir(),
         &declaration.gate,
         &verdicts,
         blocked,
         remaining.as_deref(),
         &findings,
-        &survey(&hook, &after)?,
+        &survey(hook, &after)?,
     );
-    Ok(!blocked)
+    Ok(blocked)
 }
 
 pub fn reset(reason: &str) -> Result<bool, String> {
     let count = state::log_reset(reason)?;
+    crate::round::abandon_logs();
     report::reset_done(count, reason);
     Ok(true)
 }

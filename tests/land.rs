@@ -32,14 +32,14 @@ fn a_path_no_gate_reaches_lands_without_comment() {
 
 // stdout is the channel an agent parses, and git's own output is the only other thing on it: a landed commit it has to infer is one it may make twice.
 #[test]
-fn the_landed_commit_is_announced_on_stdout() {
+fn the_landed_commit_reaches_stdout() {
     let repo = Repo::new();
     repo.declare(CLEAN, &[STANDARDS]);
     repo.stage(&["src.rs"]);
     let run = repo.attest_until(AIM, 3);
     assert!(repo.committed(), "{}", run.err);
-    assert!(run.out.contains("committed "), "{}", run.out);
-    assert!(run.out.contains("nothing left to run"), "{}", run.out);
+    // git says what it committed; the tool does not say it again.
+    assert!(run.out.contains("1 file changed"), "{}", run.out);
 }
 
 // The diary is keyed on HEAD, which the commit moved, so a second run finds no step and nothing staged — which is not the hook failing to declare a gate.
@@ -77,7 +77,7 @@ fn what_the_reviewer_said_reaches_the_author() {
     let path = run
         .err
         .lines()
-        .find_map(|l| l.strip_prefix("see the full report: "))
+        .find_map(|l| l.strip_prefix("full report: "))
         .expect("a path")
         .trim()
         .to_string();
@@ -97,7 +97,7 @@ fn a_reset_is_counted_and_keeps_its_reason() {
         "reset", "--repo", &root, "the", "brief", "named", "the", "wrong", "aim",
     ]);
     assert_eq!(run.code, 0, "{}", run.err);
-    assert!(run.err.contains("reset 1"), "{}", run.err);
+    assert!(run.err.contains("1 verdict(s) dropped"), "{}", run.err);
 
     let message = repo.landed("a different aim entirely", 3);
     assert!(message.contains("resets=1"), "{message}");
@@ -125,16 +125,24 @@ fn a_long_report_is_written_where_it_can_be_read_whole() {
     repo.stage(&["src.rs"]);
     let run = repo.attest(AIM);
     assert!(run.out.contains("standards: major=0"), "{}", run.out);
-    assert!(!run.err.contains("finding 42"), "{}", run.err);
-    let path = run
-        .err
-        .lines()
-        .find_map(|l| l.strip_prefix("see the full report: "))
-        .expect("a path")
-        .trim()
-        .to_string();
+    let at = repo.last_round().expect("a round wrote somewhere");
+    // Numbered in the order the gates ran, so the name carries its place as well as its gate.
+    let path = std::fs::read_dir(&at)
+        .expect("the round's directory")
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| p.to_string_lossy().ends_with("-standards.log"))
+        .expect("a report for the gate");
     let body = std::fs::read_to_string(&path).expect("the report");
     assert!(body.contains("finding 42"), "{body}");
     assert!(body.contains("finding 60"), "{body}");
-    let _ = std::fs::remove_file(&path);
+    // The caller is handed an index, not sixty lines: the gate, its verdict and the file that holds the rest.
+    let said = repo.awaited();
+    assert!(said.out.contains(&at.display().to_string()), "{}", said.out);
+    assert!(
+        said.out.contains("-standards.log  # standards: major=0"),
+        "{}",
+        said.out
+    );
+    assert!(!said.out.contains("finding 42"), "{}", said.out);
 }

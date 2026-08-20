@@ -34,8 +34,8 @@ What the guide leaves to this file:
   the declarations rather than keeping a second copy in a config file.
 - **`--model` passes through unchecked.** A name the agent will not answer for fails the run and names
   the gate that declared it: that is the hook's wiring, not the commit's.
-- **`--require-version` pins a compatibility line.** Any later `1.x` satisfies `1.14`. An older build
-  is refused as stale, and `2.0.0` as a different line, because a major release may take a flag away
+- **`--require-version` pins a compatibility line.** Any later `2.x` satisfies `2.0`. An older build
+  is refused as stale, and `1.x` as a different line, because a major release may take a flag away
   or change what a trailer must carry. Without it, a hook written against the old grammar finds out
   when a commit dies on an unknown flag.
 - **Most gates should be `--simple`.** One gate holds the bar, the rest report. A repo that blocks on
@@ -96,12 +96,12 @@ when the editing does, and a trailer never attests text that is no longer there.
 
 ```console
 $ git agent-verdict attest --repo /home/me/src/my-repo \
-    --intent "the commit-msg hook delegates verdict verification to a CLI" \
-    --confirm-running-in-background-shell-with-long-timeout
-git-agent-verdict: judging the intent…
+    --intent "the commit-msg hook delegates verdict verification to a CLI"
+git-agent-verdict: reviewing — pid 41207
+output: ~/.agent-verdicts/my-repo-3f9a1c04/4da9793e-…
 standards: major=0 moderate=1 minor=1
 
-see the full report: ~/.agent-verdicts/my-repo-3f9a1c04/4da9793…-1-standards.log
+see the full report: ~/.agent-verdicts/my-repo-3f9a1c04/4da9793e-…/standards.log
 
 agent-verdict gates mandated by repo:
   standards    [PASSED - major=0 moderate=1 minor=1]
@@ -119,11 +119,12 @@ Running `attest`:
   holding one shell open across a long task is often not standing where it believes.
 - **The index and the working tree must agree** on every file a gate reviews. The reviewer opens
   those files and the commit carries the index, so a disagreement is refused rather than attested.
-- **Run it directly, with no wait loop.** A second `attest` refuses at once, saying how long the claim
-  has been held and naming what holds it, where the system will say. The claim lives
-  on a file descriptor the reviewer inherits, so it outlives a run killed from outside. A hand-built
-  `pgrep -f` guard matches the wrapping shell's own arguments and waits for ever; the tell is that
-  nothing runs at all.
+- **`attest` starts a review and returns.** The review runs in a process of its own, so killing the
+  caller costs nothing. `git agent-verdict await --repo <root>` blocks until it answers and exits on
+  what it decided; `abort` ends one, and the verdicts earlier gates earned stand. A second `attest`
+  names the review already running rather than starting another, so there is nothing to write a wait
+  loop around — and a hand-built `pgrep -f` guard matches the wrapping shell's own arguments and
+  waits for ever.
 - **The ceiling is 30 minutes**, raised with `--timeout`. A review that stops answering is killed and
   reported. A reviewer that crashes, answers with no verdict, or is cut off mid-answer exits 2
   carrying what it said, so a failed review never reads as a clean one.
@@ -139,8 +140,7 @@ code nobody is touching, and no diff will ever show it. `audit` reviews the tree
 
 ```console
 $ git agent-verdict audit --repo /home/me/src/my-repo \
-    --confirm-reviewing-the-whole-repo-not-a-commit \
-    --confirm-running-in-background-shell-with-long-timeout
+    --confirm-reviewing-the-whole-repo-not-a-commit
 ```
 
 One full review per gate, on every tracked file that gate's pathspec reaches. It records and commits

@@ -24,7 +24,7 @@ You review the {{gate}} gate of this repository.
 {{criteria}}</mandatory-review-criteria>
 
 <grading-criteria>
-{{ladder}}
+{{severity}}
 </grading-criteria>
 
 <output-format>
