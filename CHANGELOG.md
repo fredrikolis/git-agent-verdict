@@ -4,6 +4,11 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [2.0.3] - 2026-08-19
+
+### Added
+- npm channel: `npm install -g git-agent-verdict` installs the same prebuilt binary.
+
 ## [2.0.2] - 2026-08-19
 
 ### Changed
