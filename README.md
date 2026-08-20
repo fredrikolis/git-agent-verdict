@@ -5,7 +5,7 @@ Verifies that a commit message carries an attested review verdict, and blocks on
 blocker. It is blind to what the standards say: the reviewer reads the standard, the gate reads a
 verdict.
 
-![you-shall-not-pass.gif](https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExZGt0eDU0c3hoc2Nlb2Jqd3c5azhjcmRyZXJhMDA0NHlmbHdlaDM1ayZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/5SAPlGAS1YnLN9jHua/giphy.gif)
+![you-shall-not-pass.gif](https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExOGN1MTdmZzM3OWpwMXg0MjZrcGsyZmZ3MjN6Y2dsb3I3MzdydHc3byZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/YkfhemFXalh7O/giphy.gif)
 
 Built for repos where commits are written by agents. No human is expected to write a trailer.
 
