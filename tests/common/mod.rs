@@ -8,6 +8,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 pub const WHOLE: &str = "--confirm-reviewing-the-whole-repo-not-a-commit";
+pub const STAGED_ONLY: &str = "--confirm-attesting-the-staged-version-not-the-working-tree";
 pub const BIN: &str = env!("CARGO_BIN_EXE_git-agent-verdict");
 static SEQ: AtomicU32 = AtomicU32::new(0);
 
@@ -250,6 +251,12 @@ impl Repo {
     pub fn again(&self) -> Run {
         let root = self.root();
         self.round(&["attest", "--repo", &root])
+    }
+
+    // The confirmation the drift refusal names, and nothing else does.
+    pub fn attest_staged_only(&self, intent: &str) -> Run {
+        let root = self.root();
+        self.round(&["attest", "--repo", &root, "--intent", intent, STAGED_ONLY])
     }
 
     // A ceiling stated in seconds: proving a hung reviewer is killed must not cost the half hour the default allows.

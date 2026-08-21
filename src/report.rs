@@ -95,7 +95,9 @@ pub fn flow() {
     eprintln!(
         "\nThis repository mandates `git agent-verdict` for all commits. To commit:\n\n  \
          git agent-verdict attest --repo {here} --intent \"<intent: one line, at most {} characters>\"\n\n\
-         That reviews this repository's {}, in declaration order, halting at the first MAJOR. \
+         That reviews this repository's {}, in declaration order, halting at the first MAJOR. Each \
+         gate reviews the staged change under its own paths, and is skipped where nothing is \
+         staged under them. \
          Every MAJOR and MODERATE finding is a required fix; MINOR is at your discretion. Once \
          they are fixed, run attest again with no --intent (a MAJOR requires the re-review; a \
          MODERATE does not), until every gate has passed. Then:\n\n  \
@@ -177,10 +179,17 @@ pub fn maintenance(files: &[String]) {
 // The verdict says the staged content was reviewed. A reviewer opens files to read them in context, so where the worktree and the index disagree it reviewed something the commit will not carry, and the trailer would say otherwise.
 pub fn drifted(files: &[String]) {
     eprintln!(
-        "git-agent-verdict: error: the index and the working tree disagree on {}.",
+        "git-agent-verdict: error: staged at one version and edited since: {}.",
         files.join(", ")
     );
-    eprintln!("The reviewer reads the working tree; the commit records the index. Stage or restore the listed files.");
+    eprintln!(
+        "A round reviews the staged change. The reviewer also opens the working tree, which here \
+         holds text the commit will not carry, and the usual cause is a fix that was never staged.\n\
+         Stage those edits with `git add`, or, if the staged version is the one to review:\n\n  \
+         git agent-verdict attest --repo {} {}",
+        here(),
+        crate::cli::STAGED_ONLY
+    );
 }
 
 pub fn judging() {
@@ -342,7 +351,8 @@ pub fn started(started: &crate::round::Started) {
     );
     println!("{}", started.at.display());
     println!(
-        "Use `git agent-verdict await --repo {}` to wait for it.\n\
+        "This round reviews what is staged now.\n\
+         Use `git agent-verdict await --repo {}` to wait for it.\n\
          Do not poll with pgrep, sleep or any combination of them: those guards match their own \
          shell and can stall for hours. If your harness interrupts the await, run it again.",
         here()

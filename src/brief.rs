@@ -134,7 +134,7 @@ impl Reach {
     // How far past what it was handed the reviewer must look. A tree has no edited lines to stop at, and a reviewer told to look past them anyway goes hunting for a change nobody made.
     fn rule(self) -> &'static str {
         match self {
-            Reach::Diff => "Judge the diff and what it affects, not only the edited lines.",
+            Reach::Diff => "Judge the diff and what it affects, not only the edited lines. Only the staged change is under review, and the working tree may hold edits that are not part of it.",
             Reach::Whole => "Judge each file as it stands. Nothing here is a change, and there is no diff to read.",
         }
     }

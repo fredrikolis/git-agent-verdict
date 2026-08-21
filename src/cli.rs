@@ -20,6 +20,8 @@ pub const USAGE: &str = concat!(
 
 // Undocumented on purpose and in no usage line: the refusal below is the only place an agent meets it, which is the moment the reminder is worth anything. It states what the caller means to spend, and an agent reaching for `audit` because `attest` refused is exactly the mistake it stops.
 pub const WHOLE: &str = "--confirm-reviewing-the-whole-repo-not-a-commit";
+// Undocumented on purpose: it is named in the refusal it answers and nowhere else. A caller that has not just read why the index and the working tree disagree has no business asserting that they are meant to.
+pub const STAGED_ONLY: &str = "--confirm-attesting-the-staged-version-not-the-working-tree";
 
 // Verbs a dev agent types, as against a declaration a hook carries: mistyping one is not a repo whose wiring has gone stale, so the setup guide would be noise.
 pub fn agent_verb(args: &[String]) -> bool {
@@ -84,7 +86,7 @@ pub struct Invocation {
 pub enum Mode {
     Gate(Box<Invocation>),
     // The repo comes first because nothing else means anything without it: the verb acts on the tree named here and never on the one the shell is standing in. The ceiling comes last because it is the one field with an answer when the author gives none.
-    Attest(String, Option<String>, std::time::Duration),
+    Attest(String, Option<String>, std::time::Duration, bool),
     Reset(String, String),
     Await(String),
     Abort(String),
@@ -159,6 +161,7 @@ struct Parsed {
     repo: Option<String>,
     timeout: Option<String>,
     whole: bool,
+    staged_only: bool,
     brief: Brief,
     standards: Vec<String>,
     docs: Vec<String>,
@@ -188,6 +191,7 @@ fn collect(args: impl Iterator<Item = String>) -> Result<Parsed, String> {
             }
             "--model" => p.model = Some(args.next().ok_or("--model needs a model name")?),
             WHOLE => p.whole = true,
+            STAGED_ONLY => p.staged_only = true,
             "--simple" => p.brief.simple = true,
             "--read-only" => p.read_only = true,
             "--override-prompt" => {
@@ -234,6 +238,7 @@ fn only(detail: &str, p: &Parsed, takes: &[&str]) -> Result<(), String> {
         ("--timeout", p.timeout.is_some()),
         ("--model", p.model.is_some()),
         (WHOLE, p.whole),
+        (STAGED_ONLY, p.staged_only),
         ("--simple", p.brief.simple),
         ("--read-only", p.read_only),
         ("--override-prompt", p.brief.prompt.is_some()),
@@ -279,14 +284,14 @@ fn attest(p: &Parsed) -> Result<Mode, String> {
         only(
             "attest takes --repo, --intent and --timeout only: what each gate reviews comes from the commit-msg hook",
             p,
-            &["--repo", "--timeout", "<positional>"],
+            &["--repo", "--timeout", STAGED_ONLY, "<positional>"],
         )?;
-        return Ok(Mode::Attest(repo, None, ceiling));
+        return Ok(Mode::Attest(repo, None, ceiling, p.staged_only));
     };
     // An aim that will not fit is usually two aims: the limit is a decomposition check as much as a brevity one.
     if intent.contains('\n') || intent.chars().count() > INTENT_LIMIT {
         let detail = format!(
-            "--intent: one line, at most {INTENT_LIMIT} characters, stating what the change does.\nAn intent that does not fit describes more than one change; commit them separately."
+            "--intent: one line, at most {INTENT_LIMIT} characters, stating what the change does.\nAn intent that does not fit describes more than one change; commit them separately: unstage all but one with `git restore --staged <paths>`, attest what remains, then repeat."
         );
         return Err(detail);
     }
@@ -296,9 +301,9 @@ fn attest(p: &Parsed) -> Result<Mode, String> {
     only(
         "attest takes --repo, --intent and --timeout only: what each gate reviews comes from the commit-msg hook",
         p,
-        &["--intent", "--repo", "--timeout", "<positional>"],
+        &["--intent", "--repo", "--timeout", STAGED_ONLY, "<positional>"],
     )?;
-    Ok(Mode::Attest(repo, Some(intent), ceiling))
+    Ok(Mode::Attest(repo, Some(intent), ceiling, p.staged_only))
 }
 
 // Said in full at the one moment it is worth reading: an agent that reached for this verb because attest refused it needs the difference between them, not a flag name.

@@ -4,6 +4,12 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [2.0.5] - 2026-08-21
+
+### Changed
+- attest refuses only a file staged at one version and edited since, not every unstaged edit. Reviewing a subset of the worktree no longer needs a stash.
+- The staged scope is stated where a caller reads it: the hook rejection, the spawn line, and the reviewer's brief.
+
 ## [2.0.4] - 2026-08-20
 
 ### Fixed

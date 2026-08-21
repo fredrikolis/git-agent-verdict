@@ -221,13 +221,51 @@ fn an_unstaged_edit_to_a_reviewed_file_refuses_before_reviewing() {
     let run = repo.attest(AIM);
     assert_eq!(run.code, 1, "{}", run.err);
     assert!(
-        run.err.contains("index and the working tree disagree"),
+        run.err.contains("staged at one version and edited since"),
         "{}",
         run.err
     );
     // Before the cheapest call the run makes, so nothing was spent on it.
     assert!(!run.err.contains("judging the intent"), "{}", run.err);
     assert!(!repo.committed(), "{}", run.err);
+}
+
+// The refusal names the confirmation, and asserting it reviews the staged version rather than the newer one.
+#[test]
+fn confirming_the_staged_version_reviews_it() {
+    let repo = Repo::new();
+    repo.declare(CLEAN, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    repo.write("src.rs", "edited after staging, never added");
+    let refused = repo.capture_attest(AIM);
+    assert_eq!(refused.code, 1, "{}", refused.err);
+    assert!(
+        refused.err.contains(common::STAGED_ONLY),
+        "the refusal names the confirmation: {}",
+        refused.err
+    );
+    let run = repo.attest_staged_only(AIM);
+    assert_eq!(run.code, 0, "{}", run.err);
+}
+
+// A file a gate watches, edited and never staged, is not in this round: staging one change while another is in progress is ordinary git.
+#[test]
+fn an_edit_that_was_never_staged_is_not_in_the_round() {
+    let repo = Repo::new();
+    repo.declare(CLEAN, &[STANDARDS]);
+    repo.write("other.rs", "committed");
+    repo.stage(&["src.rs", "other.rs", "rubric.md"]);
+    common::git(&repo.dir, &["commit", "--no-verify", "-q", "-m", "base"]);
+    repo.write("src.rs", "the change under review");
+    repo.stage(&["src.rs"]);
+    repo.write("other.rs", "work in progress, staged for no one");
+    let run = repo.attest(AIM);
+    assert_eq!(run.code, 0, "{}", run.err);
+    assert!(
+        !run.err.contains("edited since"),
+        "an unstaged edit is not drift: {}",
+        run.err
+    );
 }
 
 // Staging one change and carrying on with another is ordinary git. Only the files a gate actually reviews have to agree with the index.
@@ -244,7 +282,7 @@ fn an_unstaged_edit_no_gate_reviews_is_left_alone() {
     repo.stage(&["src.rs"]);
     let run = repo.attest("raise the staged file's line count");
     assert!(
-        !run.err.contains("index and the working tree disagree"),
+        !run.err.contains("staged at one version and edited since"),
         "{}",
         run.err
     );

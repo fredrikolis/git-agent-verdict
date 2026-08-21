@@ -133,9 +133,9 @@ fn main() -> ExitCode {
     let (label, outcome) = match &mode {
         Mode::Gate(inv) => (inv.gate.as_str(), gate::check(inv)),
         // Held across the whole run, and dropped with it: the diary is read, added to and written back, so two runs at once review the same gate, pay for it twice, and the second to finish drops the first's verdict.
-        Mode::Attest(repo, intent, ceiling) => (
+        Mode::Attest(repo, intent, ceiling, staged_only) => (
             "attest",
-            enter(repo).and_then(|()| attest::run(intent.as_deref(), *ceiling)),
+            enter(repo).and_then(|()| attest::run(intent.as_deref(), *ceiling, *staged_only)),
         ),
         // Held like attest's: one review at a time in a repo, whichever verb is paying for it.
         Mode::Audit(repo, ceiling) => ("audit", enter(repo).and_then(|()| audit::run(*ceiling))),

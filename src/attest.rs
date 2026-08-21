@@ -163,18 +163,23 @@ fn land(hook: &Hook, steps: &[state::Step], intent: Option<&str>) -> Result<bool
 }
 
 // The caller's half: everything that can refuse before money is spent, then a round it does not wait for.
-pub fn run(asked: Option<&str>, ceiling: std::time::Duration) -> Result<bool, String> {
+pub fn run(
+    asked: Option<&str>,
+    ceiling: std::time::Duration,
+    staged_only: bool,
+) -> Result<bool, String> {
     let hook = declarations::read()?;
-    // Every gate asked at once, before the first review rather than before each: a run that pays for one gate and then refuses at the next has spent the money either way.
+    // A file staged at one version and edited since is the one case worth refusing: the reviewer opens the working tree, the commit records the index, and the two are not the same text. An edit that was never staged is not in this round at all, and every gate is asked at once because a run that pays for one and then refuses at the next has spent the money either way.
     let mut drifting: Vec<String> = Vec::new();
     for declaration in &hook.gates {
+        let staged = git::staged(&declaration.paths)?;
         for file in git::unstaged(&declaration.paths)? {
-            if !drifting.contains(&file) {
+            if staged.contains(&file) && !drifting.contains(&file) {
                 drifting.push(file);
             }
         }
     }
-    if !drifting.is_empty() {
+    if !drifting.is_empty() && !staged_only {
         report::drifted(&drifting);
         return Ok(false);
     }
