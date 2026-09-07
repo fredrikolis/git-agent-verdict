@@ -38,12 +38,11 @@ jobs:
         run: cargo test --all --locked
 
   # The same two linters .githooks/pre-commit runs, at the same pinned versions.
-  # A version bump belongs in one commit that also clears whatever the new one finds.
   gates:
     runs-on: ubuntu-latest
     env:
       ANNOTATED_TREE_VERSION: 0.6.0
-      LINT_EXTRA_REV: 7a232179e45414108d28047acd6315d9a2c4946b
+      COMMENT_CRUSHER_VERSION: 0.2.0
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -53,9 +52,8 @@ jobs:
       - name: Comment budget
         run: |
           set -eux
-          cargo install --git https://github.com/fredrikolis/cargo-lint-extra \
-            --rev "$LINT_EXTRA_REV" --locked cargo-lint-extra
-          cargo lint-extra --config .cargo-lint-extra.toml .
+          cargo install --locked "comment-crusher@${COMMENT_CRUSHER_VERSION}"
+          comment-crusher .
 
   # Freeze the git-subcommand contract: the binary must be reachable as
   # `git agent-verdict`, which is how every hook in the README invokes it.
