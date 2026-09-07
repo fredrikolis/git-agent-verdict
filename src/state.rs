@@ -11,7 +11,7 @@ const RESETS: &str = "resets.log";
 const PENDING: &str = "pending";
 const PROPOSED: &str = "proposed-intent";
 
-// A diary, not a vault: `--no-verify` exists, so nothing here resists an author who means it. What it buys is that a count cannot be edited by accident or read by grep.
+// A diary, not a vault: `--no-verify` exists. This only stops accidental edits and a grep.
 fn digest(bytes: &[u8], seed: u64) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325u64 ^ seed;
     for byte in bytes {
@@ -50,7 +50,7 @@ fn root() -> Result<PathBuf, String> {
     git::git_path(DIR)
 }
 
-// Keyed on HEAD because the commit does not exist yet and HEAD does not move while the author is fixing what a review named. It lands, HEAD moves, and the next commit starts clean.
+// Keyed on HEAD: the commit being reviewed doesn't exist yet, and HEAD moves only once it lands.
 fn here() -> Result<PathBuf, String> {
     let dir = root()?.join(git::head_sha());
     std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
@@ -58,7 +58,7 @@ fn here() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-// A rebase or a checkout mid-review orphans a directory; it is dropped on the next write rather than by a verb nobody would run.
+// A rebase or checkout mid-review orphans a directory; dropped on the next write, not by a verb nobody runs.
 fn gc(keep: &Path) {
     let Ok(root) = root() else { return };
     let Ok(entries) = std::fs::read_dir(&root) else {
@@ -142,7 +142,7 @@ pub fn progress() -> Result<Vec<Step>, String> {
     Ok(steps)
 }
 
-// A round that opened and has not closed. Written before the reviewer is spawned and cleared when its verdict is recorded, so anything found here afterwards is a round that died in flight — and the session it names is still on disk holding everything that reviewer had read.
+// Found still here means the round died in flight; its session is still on disk with what it had read.
 pub struct Pending {
     pub gate: String,
     pub session: String,
@@ -154,7 +154,6 @@ pub fn open_round(gate: &str, session: &str) -> Result<(), String> {
         .map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
-// Called where a round is decided to be over. What is left behind is a round nothing closed.
 pub fn close_round() {
     if let Ok(dir) = here() {
         let _ = std::fs::remove_file(dir.join(PENDING));
@@ -199,7 +198,7 @@ pub fn intent() -> Result<Option<String>, String> {
     Ok(std::fs::read_to_string(path).ok())
 }
 
-// An aim the caller stated and no judge has answered yet. Written before a round is spawned so the round can be killed without the aim being asked for twice, and never read as the aim itself: what a reviewer is briefed against is the accepted one.
+// Never the aim a reviewer is briefed against — only an accepted intent is that.
 pub fn proposed() -> Result<Option<String>, String> {
     let path = here()?.join(PROPOSED);
     Ok(std::fs::read_to_string(path).ok())
@@ -243,7 +242,7 @@ pub fn lookup(token: &str) -> Result<Option<Record>, String> {
     }))
 }
 
-// One level up, outside the directory a reset clears: a log that a reset erases is a log of nothing.
+// Outside the per-commit directory a reset clears: a log that a reset erases is a log of nothing.
 pub fn log_reset(reason: &str) -> Result<u32, String> {
     let root = root()?;
     std::fs::create_dir_all(&root).map_err(|e| format!("cannot create {}: {e}", root.display()))?;

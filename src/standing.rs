@@ -6,22 +6,19 @@ use crate::report;
 use crate::state;
 use crate::trailer;
 
-// A gate with nothing staged is not part of this commit — exactly as the gate itself decides when the hook runs.
 pub fn applies(declaration: &Declaration) -> Result<bool, String> {
     Ok(!git::staged(&declaration.paths)?.is_empty())
 }
 
-// The last word on a gate, which is the only one that counts: a re-review supersedes what it was asked to look at again.
 pub fn latest<'a>(gate: &str, steps: &'a [state::Step]) -> Option<&'a state::Step> {
     steps.iter().rfind(|s| s.gate == gate)
 }
 
-// MAJOR alone re-opens a gate. Acting on a MODERATE moves content too, and re-reviewing for that resamples advice the author already has — a loop keyed on content never ends.
+// MAJOR alone re-opens a gate: re-reviewing for a MODERATE fix would resample advice, forever.
 pub fn settled(declaration: &Declaration, steps: &[state::Step]) -> bool {
     latest(&declaration.gate, steps).is_some_and(|step| !step.blocked)
 }
 
-// Line order is review order, and a later gate must never be judged against content an earlier one is still changing: the position is held here so nothing has to sequence it by hand.
 pub fn next<'a>(hook: &'a Hook, steps: &[state::Step]) -> Result<Option<&'a Declaration>, String> {
     for declaration in &hook.gates {
         if !applies(declaration)? || settled(declaration, steps) {
@@ -32,7 +29,6 @@ pub fn next<'a>(hook: &'a Hook, steps: &[state::Step]) -> Result<Option<&'a Decl
     Ok(None)
 }
 
-// Every gate this hook declares, and where each one stands: what is left is not a number, because a fix can bring a file into a pathspec that reached nothing before.
 pub fn survey(
     hook: &Hook,
     steps: &[state::Step],

@@ -21,7 +21,7 @@ impl Outcome {
     }
 }
 
-// What the work is handed: where to write, and a way to say which gate it has reached. Nothing about what it is reviewing, because this side does not know and must not learn.
+// Nothing here says what is being reviewed: this side does not know and must not learn.
 pub struct Round {
     id: String,
     dir: PathBuf,
@@ -35,7 +35,6 @@ impl Round {
         &self.dir
     }
 
-    // The description moves as the round does, so anything that finds the claim taken can say what is being reviewed rather than only that something is. The narration moves with it: what the run says while reviewing a gate belongs beside that gate's findings, not in one file spanning all of them.
     pub fn at_gate(&self, gate: &str) {
         if !gate.is_empty() {
             redirect(
@@ -66,14 +65,13 @@ fn pipe_path() -> Result<PathBuf, String> {
     crate::git::git_path("agent-verdict.round")
 }
 
-// One directory per commit being written, named before the first reviewer runs, so a caller can be told where to look before there is anything to look at and every gate since the last reset is listed together.
 fn dir_for(_round: &str) -> Result<PathBuf, String> {
     let dir = report::verdicts_dir()?.join(crate::git::head_sha());
     std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     Ok(dir)
 }
 
-// Where the last round wrote, kept beside the claim rather than in the commit diary: a diary is dropped the moment HEAD moves, which is exactly when the report of the review that let it move is asked for.
+// Kept beside the claim, not the commit diary: the diary is dropped the moment HEAD moves.
 fn remember(at: &Path) -> Result<(), String> {
     let path = crate::git::git_path("agent-verdict.last")?;
     std::fs::write(&path, at.to_string_lossy().as_bytes())
@@ -86,14 +84,12 @@ pub fn last_at() -> Option<PathBuf> {
     (!at.is_empty()).then(|| PathBuf::from(at))
 }
 
-// The pointer, not the logs: a landed commit keeps its reports and stops answering for the next one.
 pub fn forget_last() {
     if let Ok(path) = crate::git::git_path("agent-verdict.last") {
         let _ = std::fs::remove_file(path);
     }
 }
 
-// A reset drops the verdicts, so it drops what they wrote: what a later listing shows is what has been reviewed since.
 pub fn abandon_logs() {
     if let Ok(path) = crate::git::git_path("agent-verdict.last") {
         let _ = std::fs::remove_file(path);
@@ -103,7 +99,7 @@ pub fn abandon_logs() {
     }
 }
 
-// The round's last word about itself. Written whatever happens, so a directory without one is a round that died before it could speak.
+// Written whatever happens: a directory without one is a round that died before it could speak.
 fn conclude(at: &Path, status: &str) {
     let _ = std::fs::write(at.join(STATUS), format!("{status}\n"));
 }
@@ -117,7 +113,7 @@ fn concluded(at: &Path) -> Option<String> {
     )
 }
 
-// Opened by the process that will hold it and by nothing else. A reader finds a writer exactly while a round lives, so the end of a round is an end-of-file rather than a fact somebody has to record.
+// A reader finds a writer exactly while a round lives, so the round ending is an EOF, not a recorded fact.
 fn open_pipe() -> Result<std::fs::File, String> {
     let path = pipe_path()?;
     let name = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
@@ -134,7 +130,7 @@ fn open_pipe() -> Result<std::fs::File, String> {
     Ok(unsafe { <std::fs::File as std::os::unix::io::FromRawFd>::from_raw_fd(fd) })
 }
 
-// Two forks and a session of its own: one fork leaves the caller's tree the moment the middle process exits, and the session leaves its process group. A reaper that walks either finds nothing of this round. The work is a closure because after the fork the child already holds everything the caller had — passing it a verb to look up would put this side in the business of knowing what a review is.
+// Double fork plus setsid detaches the round from the caller's process tree and group.
 pub fn spawn<W>(
     held: Held,
     label: &'static str,
@@ -154,7 +150,7 @@ where
             std::io::Error::last_os_error()
         ));
     }
-    // Described before the fork, so a caller arriving in the moment between the spawn and the first gate finds a round rather than an unreadable claim. `pid 0` is what says the round has not named itself yet, and nothing signals it until it has.
+    // pid 0 says the round has not named itself yet.
     held.describe(&Landed::Round(Live {
         label: label.to_string(),
         round: id.clone(),
@@ -204,7 +200,7 @@ where
     }
 }
 
-// One line or none: a round that dies before it can name itself closes the descriptor, and the read ends rather than waiting on a process that will never write.
+// One line or none: a round dying before it names itself closes the descriptor, ending the read.
 fn told_pid(reading: i32) -> Option<u32> {
     let mut said = Vec::new();
     let mut byte = [0u8; 64];
@@ -219,7 +215,7 @@ fn told_pid(reading: i32) -> Option<u32> {
     String::from_utf8_lossy(&said).trim().parse().ok()
 }
 
-// Everything from here runs with nobody watching: stdout and stderr are a file, the caller may already be gone, and what this leaves behind is the only account of what happened.
+// Nobody is watching from here: stdout/stderr are a file, and the caller may already be gone.
 fn carry<W>(round: Round, pipe: std::fs::File, work: W, writing: i32)
 where
     W: FnOnce(&Round) -> Result<Outcome, String>,
@@ -243,7 +239,6 @@ where
     drop(round);
 }
 
-// Re-pointed rather than opened once: the process writes to whichever file the work it is doing belongs to.
 fn redirect(to: &Path) {
     let quiet = std::fs::File::open("/dev/null");
     let log = std::fs::OpenOptions::new()
@@ -259,7 +254,7 @@ fn redirect(to: &Path) {
     }
 }
 
-// A read that cannot block on the open and cannot miss the close. Opening a pipe for reading without a writer succeeds at once, and the read that follows tells the two apart: nothing to read and no writer is an end-of-file, while nothing to read with a writer holding the other end is the round still running. Only then is there anything to wait for, and the wait ends when that writer closes.
+// A FIFO opens at once with no writer; the read after tells EOF apart from "still running".
 fn hung_up() -> Result<(), String> {
     use std::os::unix::fs::OpenOptionsExt;
     let path = pipe_path()?;
@@ -269,13 +264,12 @@ fn hung_up() -> Result<(), String> {
         .open(&path)
     {
         Ok(file) => file,
-        // Nothing has ever opened one here, which is an answer, not a fault.
+        // No FIFO ever opened here is an answer, not a fault.
         Err(why) if why.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(why) => return Err(format!("cannot open {}: {why}", path.display())),
     };
     let fd = file.as_raw_fd();
     let mut byte = [0u8; 1];
-    // The non-blocking read only classifies: nothing to read and no writer is an end-of-file, while nothing to read with a writer holding the other end is a review still running.
     loop {
         let read = unsafe { libc::read(fd, byte.as_mut_ptr().cast(), 1) };
         if read == 0 {
@@ -296,7 +290,7 @@ fn hung_up() -> Result<(), String> {
             }
         }
     }
-    // Then a blocking read, which is the wait itself: it returns zero when the last writer closes, on every unix. Nothing polls, and no readiness call has to agree about what a hangup on a pipe means.
+    // POSIX guarantees this blocking read returns 0 once the last writer closes: no polling.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK) } < 0 {
         return Err(format!(
@@ -320,7 +314,6 @@ fn hung_up() -> Result<(), String> {
     }
 }
 
-// What the round decided, read and never judged: it wrote its own conclusion, and a second opinion here would be one nobody asked for.
 pub fn wait() -> Result<bool, String> {
     hung_up()?;
     let Some(at) = last_at() else {
@@ -339,7 +332,7 @@ pub fn wait() -> Result<bool, String> {
     }
 }
 
-// Ending a round is something a person does on purpose, so it is a verb rather than a signal somebody has to find a pid for. Every verdict already earned is kept: throwing those away to stop one gate is paying twice.
+// Verdicts already earned are kept: throwing those away to stop one gate is paying twice.
 pub fn abort(abandon: impl FnOnce() -> Vec<(String, report::Standing)>) -> Result<bool, String> {
     if lock::take().is_ok() {
         report::nothing_to_abort();

@@ -9,7 +9,7 @@ const RUNNER_KEY: &str = "agent-verdict.runner";
 pub const MARKER: &str = "VERDICT:";
 pub const REFUSED: &str = "refused";
 
-// Host configuration, not a repo's: a repo that declared its reviewer would pick one for every maintainer, and they do not share a machine, a budget or a preferred agent.
+// Host config, not the repo's: maintainers don't share a machine, a budget, or a preferred agent.
 pub fn configured() -> Result<Agent, String> {
     let named = git::config(RUNNER_KEY).ok_or_else(|| {
         format!(
@@ -20,7 +20,6 @@ pub fn configured() -> Result<Agent, String> {
     Agent::named(&named)
 }
 
-// The one thing the author supplies, judged before a review is paid for. A reviewer handed the case for a change grades the case instead of the change.
 pub fn judge(answer: &Answer, intent: &str) -> Result<(), String> {
     for line in answer.text.lines() {
         let Some(rest) = line.trim().strip_prefix(MARKER) else {
@@ -31,7 +30,6 @@ pub fn judge(answer: &Answer, intent: &str) -> Result<(), String> {
             let said = rest
                 .trim_start_matches(REFUSED)
                 .trim_start_matches(['—', '-', ':', ' ']);
-            // What it said, beside the line it judged: the author has to see both to know which words to take out.
             let mut detail = format!("the intent was refused — {said}\n\n  {intent}\n");
             let rest_of = findings(&answer.text);
             if !rest_of.is_empty() {
@@ -61,12 +59,11 @@ fn counts_from(fields: &str, simple: bool) -> Result<Counts, String> {
             "minor" => 2,
             _ => continue,
         };
-        // Named but unreadable is not the same as absent: read as absent it would be reported as a missing field, sending the author after the wrong fault.
         found[slot] = Some(raw.parse().map_err(|_| {
             format!("the reviewer's {MARKER} line has {name}={raw}, which is not a number")
         })?);
     }
-    // An advisory gate is never offered a MAJOR rung, so its reviewer is not asked for the count and the zero is recorded here. Reporting one anyway answers a brief it was not given.
+    // An advisory gate is never offered a MAJOR rung; reporting one anyway answers a brief it wasn't given.
     if simple && found[0].is_some_and(|major| major > 0) {
         return Err(
             "this gate is advisory and has no MAJOR severity, but its reviewer reported major>0"
@@ -93,7 +90,6 @@ fn counts_from(fields: &str, simple: bool) -> Result<Counts, String> {
     }
 }
 
-// Everything the reviewer said that was not its verdict line. The counts say how much was found; only this says what, and an author told to address a finding it cannot read has been told nothing.
 pub fn findings(output: &str) -> String {
     output
         .lines()
@@ -104,7 +100,7 @@ pub fn findings(output: &str) -> String {
         .to_string()
 }
 
-// The reviewer's numbers are read here and never retyped by the author. Who reviewed, and on what session, come from the agent: the model would be guessing at one and cannot know the other.
+// Reviewer and session come from the agent, not the answer text: the model can't know either reliably.
 pub fn verdicts(answer: &Answer, simple: bool) -> Result<Vec<Verdict>, String> {
     let mut verdicts = Vec::new();
     for line in answer.text.lines() {
@@ -120,7 +116,7 @@ pub fn verdicts(answer: &Answer, simple: bool) -> Result<Vec<Verdict>, String> {
         });
     }
     if verdicts.is_empty() {
-        // Why it stopped, beside the fact that it did: an agent cut off at its turn limit and one that answered at length while ignoring its brief are the same silence here, and they are not the same fault. One is re-run, the other is a brief to fix.
+        // A turn-limit cutoff is a re-run; ignoring the brief is a brief to fix — same silence here.
         let stopped = match answer.stop_reason.as_str() {
             "" | "end_turn" => String::new(),
             reason => format!(" — it stopped on {reason}"),
@@ -129,7 +125,7 @@ pub fn verdicts(answer: &Answer, simple: bool) -> Result<Vec<Verdict>, String> {
             "the reviewer closed with no `{MARKER}` line{stopped}, so it reported nothing this tool can record"
         ));
     }
-    // One review, one verdict: the rest is recorded under a single token and rendered as a trailer apiece, which the gate reads as trailers contradicting the review they name.
+    // One review, one verdict: multiple would render as trailers contradicting the review they name.
     if verdicts.len() > 1 {
         return Err(format!(
             "the reviewer closed with {} `{MARKER}` lines; the brief asks for one, and which of them is the review is not this tool's to guess",

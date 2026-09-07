@@ -1,6 +1,6 @@
 // Concern: the verdict trailer's grammar — its key, its fields, what makes one blocking | Non-concern: obtaining the trailer block, or reporting a rejection | IO: (gate, block) -> verdicts
 
-// One ladder for every gate: an advisory one has no MAJOR rung and reports zero. A count that cannot reach zero gives a review no place to stop.
+// One ladder for every gate: an advisory gate has no MAJOR rung and just reports zero.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Counts {
     pub major: u32,
@@ -8,7 +8,7 @@ pub struct Counts {
     pub minor: u32,
 }
 
-// The session is evidence, not a claim: it names a transcript on one machine, so it is kept in the diary beside the counts and never published into a message.
+// Session names a transcript on one machine; kept in the diary, never published into a trailer.
 pub struct Verdict {
     pub reviewer: String,
     pub counts: Counts,
@@ -18,7 +18,6 @@ pub struct Verdict {
 }
 
 impl Counts {
-    // Written the one way the grammar defines them, wherever they are read back: a trailer, a total, or a line an author is shown.
     pub fn render(self) -> String {
         let Counts {
             major,
@@ -30,7 +29,7 @@ impl Counts {
 }
 
 impl Verdict {
-    // major= alone. A MODERATE is fixed without a second look, so its count records what the reviewer found, not what is left outstanding — blocking on it would demand a re-review that no longer happens.
+    // major= alone: a MODERATE is fixed without re-review.
     pub fn blocks(&self) -> bool {
         self.counts.major > 0
     }
@@ -51,10 +50,8 @@ pub fn total(verdicts: &[Verdict]) -> Counts {
     )
 }
 
-// The shape a rejection shows the author, and the shape a blocking gate demands back.
 pub const COUNTS_SHAPE: &str = "major=<n> moderate=<n> minor=<n>";
 
-// An advisory gate is never asked for major=: it has no MAJOR rung, and the tool records the zero rather than asking a reviewer to type a constant.
 pub const ADVISORY_SHAPE: &str = "moderate=<n> minor=<n>";
 
 pub fn key_for(gate: &str) -> String {
@@ -154,7 +151,6 @@ pub fn parse_for(gate: &str, block: &str) -> Result<Vec<Verdict>, String> {
     Ok(verdicts)
 }
 
-// The one place the grammar is written rather than read, so `attest` hands back a line this file will accept.
 pub fn render(gate: &str, verdict: &Verdict) -> String {
     let counts = verdict.counts.render();
     let resets = match verdict.resets {
@@ -190,7 +186,6 @@ mod tests {
         parse_for("standards", block)
     }
 
-    // The edge cases the end-to-end gate tests cannot reach cheaply: everything else about the grammar is frozen there instead.
     #[test]
     fn a_repeated_count_cannot_bury_a_blocker() {
         let line = "Reviewed-standards: reviewer=opus major=1 major=0 moderate=0 minor=0 token=ab";
