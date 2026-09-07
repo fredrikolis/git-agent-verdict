@@ -1,282 +1,64 @@
 <!-- Concern: decides which assertions earn a committed test | Non-concern: test tooling and framework choice | IO: none -->
 # Universal Testing Principles
 
-Testing as governance. Every assertion is a freeze decision. Freeze deliberately.
+Every assertion is a freeze decision — writing `assert X == Y` says "future agents must update this test to change this behavior." Tests are deliberate governance, not free insurance.
 
----
+## Decision rule (in order)
 
-## CRITICAL: Quick Decision Rule
+1. External contract, consumers you can't coordinate? → **freeze** (commit a regression test).
 
-**BEFORE WRITING ANY ASSERTION:**
+2. You control both sides of this interface? → **don't freeze** (DbC: validate at the boundary, update call sites together instead).
 
-| Question | If Yes | If No |
-|----------|--------|-------|
-| External contract (can't coordinate consumers)? | **FREEZE** (commit test) | Continue |
-| You control both sides of this interface? | **DON'T FREEZE** (DbC) | Continue |
-| Already caught by e2e/integration test? | **DON'T FREEZE** (redundant) | Consider freezing |
-| Test would block principled refactor? | **DELETE TEST** (-∞) | Proceed |
+3. Already caught by an e2e/integration test at a higher level? → **don't freeze** (redundant).
 
-**Positive score = commit. Negative = skip or delete.**
+4. Would this test block a principled refactor? → **delete the test**, fix the architecture — never compromise the design to keep a test green.
 
----
+## Scoring (positive = commit, negative = skip/delete)
 
-## Scoring: When to Commit a Test
+External contract +10 · leaf-node stable abstraction +9 · high downstream dependency +8 · edge case not caught by e2e +8 · single internal caller -5 · glue/orchestration code -9 (test via e2e) · implementation detail, not interface -7 · already caught by e2e -8 · you control both sides -10 · blocks a principled refactor -∞ (delete it).
 
-| Criteria | Score | Rationale |
-|----------|-------|-----------|
-| External contract (can't coordinate consumers) | **+10** | Must freeze |
-| High downstream dependency | +8 | Many dependents at risk |
-| Leaf node stable abstraction | +9 | Interface-level freeze |
-| Edge case not caught by e2e | +8 | Unique coverage value |
-| You control both sides | **-10** | DbC violation |
-| Already caught by e2e | -8 | Redundant freeze |
-| Glue/orchestration code | -9 | Test via e2e instead |
-| Implementation detail (not interface) | -7 | Freezes "how" not "what" |
-| Single internal caller | -5 | Low blast radius |
-| Test blocks principled refactor | **-∞** | Delete test, fix architecture |
+## Freeze vs. don't freeze
 
-**Threshold**: Positive = commit. Negative = skip or delete.
+Freeze: external consumers you can't coordinate, high downstream dependency, or a format/protocol that's both unlikely to change and important that it doesn't.
 
----
+Don't freeze: internal seams where you control all callers (including a frontend/backend split inside the same app/repo — that's internal, not a public API), glue/orchestration code, or implementation detail (private methods, internal state) — that freezes "how," not "what."
 
-## Core Principle: Every Assertion is a Freeze Decision
+## Not traditional TDD
 
-**When you write `assert X == True`, you signal**: "I want this behavior FROZEN. Future agents MUST update this test to change this behavior."
+Tests aren't written first and all-committed. Workflow: write code, write a scratch test to *prove to yourself* it works, keep the scratch test in `artifacts/` (gitignored, evidence for review — not committed). Only promote to a committed regression test if the freeze criteria above say the contract deserves it.
 
-Tests create "refactor penalty" — intentional governance. Must be deliberate.
+| Type | Purpose | Assertions | Committed? |
+|---|---|---|---|
+| Scratch | prove it works to the author | yes | no — gitignored in `artifacts/` |
+| Walkthrough/tour | demonstrate usage to future agents | none (LLM reads the output) | yes |
+| Regression | freeze an external contract | yes, boundaries only | yes, forever |
 
-### Before Asserting: Three Questions
+## Architectural position
 
-| Question | Purpose | Red Flag |
-|----------|---------|----------|
-| **1. Already captured higher-level?** | Redundancy check | Same failure mode caught by e2e |
-| **2. What's actual harm if False?** | Harm analysis | "Different" vs "broken" |
-| **3. Control both sides?** | DbC check | Asserting on internal interface |
+Leaf nodes (stable abstractions): freeze the interface — would the test still make sense if the class were swapped out? Glue/orchestration: don't freeze the how, let e2e verify the integration. External APIs: freeze shape/format/semantics. Internal APIs (you own both sides): don't freeze, update call sites together.
 
-**Failure to ask → test pollution → refactor gridlock.**
+Two failure modes a frozen test can catch: an **external** change (e.g. a library update shifts a format) — assert on shape/contract, treat a failure as informational, go investigate. An **internal accident** (a developer changes behavior unintentionally) — assert on the specific behavior, treat a failure as preventive, block the change.
 
----
+Distribution: few e2e (critical paths), moderate integration (key boundaries), minimal unit (only stable leaf interfaces), many scratch (during dev, never committed).
 
-## Agent-Specific Testing Challenges
+## Test representativeness
 
-### The DRY-Like Problem
+Every test is a production approximation, and every divergence from production is a blind spot: mocked dependencies hide integration/contract drift, simplified data hides edge cases and scale, single-threaded execution hides races, local execution hides latency/DNS/timeouts, clean state each run hides accumulation bugs, deterministic ordering hides order-dependent failures.
 
-Adding test means maintaining **THREE places**:
-1. Code (implementation)
-2. Call sites (usage)
-3. Test (verification)
+Not a rule to eliminate — a lens: before taking a shortcut, name what it might stop you from catching, and document the known blind spot.
 
-**For agents**: Tests and code not in same context window → must connect dots across codebase → hidden dependencies.
+## Anti-patterns
 
-### Perverse Behavior to Avoid
+Testing implementation details (freezes "how," test the interface instead) · redundant coverage of the same failure at multiple levels (one test at the right level) · defensive tests for your own code (DbC violation — assert at boundaries only) · scratch tests committed to the regression suite (keep them gitignored) · assertion-free "tests" providing no governance (add assertions, or call it a walkthrough) · over-mocking (prefer real dependencies where feasible).
 
-| Anti-Pattern | Symptom | Remedy |
-|--------------|---------|--------|
-| Suboptimal refactor to pass tests | Awkward design because easiest path to green | Test is wrong — delete/rewrite |
-| Tests driving architecture | Design compromised for test suite | Principles drive architecture |
-| Over-accommodation | Complexity added to preserve test expectations | Tests serve code, not vice versa |
+## When a test blocks a refactor
 
-**RULE**: If test blocks principled refactor → delete or rewrite test. Never compromise architecture.
+Validate the new design is actually better, then check why the test exists: external contract → adapt the refactor or version/deprecate the old contract; implementation detail → delete the test and proceed; internal boundary → update both sides together, no backwards-compat shim.
 
----
+If adding one feature forces many test edits, the tests are coupled to implementation — rewrite them against the interface, consolidate redundant ones, or accept it as an intentional breaking change.
 
-## Freeze Criteria
+## Before you commit or delete
 
-### Freeze (commit regression test) when:
+Commit a regression test only if: the freeze decision is justified, it's not redundant with a higher-level test, it asserts on the interface not the implementation, and it has a clear failure message.
 
-| Criteria | Example | Rationale |
-|----------|---------|-----------|
-| External consumers you can't coordinate | Public API, library interface | Breaking change = downstream failures |
-| High downstream dependency | Critical system contracts | Bug propagates widely |
-| Unlikely to change AND important it doesn't | Data format, protocol | Stability requirement explicit |
-
-### Don't freeze when:
-
-| Criteria | Example | Rationale |
-|----------|---------|-----------|
-| You control all callers | Internal service boundaries | Update together (DbC) |
-| Internal seam, own both sides | Frontend/backend same repo | Coordinate changes |
-| Glue/orchestration code | Coordination logic | Test via e2e |
-| Implementation detail | Private methods, internal state | Freezes "how" not "what" |
-
-**DbC connection**: Frontend/backend boundary in same app = INTERNAL seam, not external API. Don't freeze like public contract.
-
----
-
-## Not Traditional TDD
-
-**This is NOT traditional TDD** (red-green-refactor with all tests committed).
-
-| Traditional TDD | Our Approach |
-|-----------------|--------------|
-| Write failing test first | Write code, then scratch test to prove it works |
-| All tests committed | Most tests kept in artifacts/ (gitignored, not committed) |
-| Tests = specification | Scratch tests = proof; regression tests = governance |
-| Pass = success | Pass ≠ success |
-
-**Development workflow:**
-```
-Code → Scratch test (prove it works) → KEEP in artifacts/ (gitignored)
-                                              ↓
-                            Only commit regression test if external contract deserves freezing
-```
-
-
----
-
-## Test Types & Purposes
-
-| Type | Purpose | Assertions | Lifecycle | Audience |
-|------|---------|------------|-----------|----------|
-| **Scratch** | Self-convincing ("does this work?") | Yes, evidence persists | Gitignored (kept in artifacts/) | Developer/agent writing code |
-| **Walkthrough/Tour** | Demonstrate usage, educate | None (LLM analyzes output) | Permanent | Future agents |
-| **Regression** | Freeze external contracts | Yes (boundaries only) | Permanent | CI/CD gate |
-
-**Where knowledge lives**:
-- Scratch → evidence persists in artifacts/ for review → not committed to git
-- Walkthrough → executable documentation → no assertions
-- Regression → "this must not change" contract → maintained forever
-
-
----
-
-## Architectural Position Matters
-
-| Code Type | Testing Strategy | Test Focus |
-|-----------|------------------|------------|
-| **Leaf nodes** (stable abstractions) | Freeze interface | "Would test make sense if class replaced?" |
-| **Glue code** (orchestration) | Don't freeze HOW | E2e verifies integration |
-| **External APIs** (can't coordinate) | Freeze contract | Shape, format, semantics |
-| **Internal APIs** (control both sides) | Don't freeze | Update all call sites together |
-
----
-
-## Two Failure Modes Tests Protect Against
-
-| Mode | Example | Assert On | Response to Failure |
-|------|---------|-----------|---------------------|
-| **External change** | Library update changes format | Shape/contract | Informational — investigate |
-| **Internal accident** | Developer mistakenly changes behavior | Specific behavior | Preventive — block change |
-
----
-
-## Testing as Trade-off
-
-| Too Few Tests | Too Many / Wrong Tests |
-|---------------|------------------------|
-| Quality risk, bugs slip through | Refactors blocked |
-| Low confidence | Feature dev harder |
-| Regressions undetected | Tests fight maintenance |
-
-**Tests should assist development, not fight it.**
-
----
-
-## Test Levels
-
-| Level | Purpose | Freeze Target |
-|-------|---------|---------------|
-| **E2E** | User scenarios work | Full application behavior |
-| **Integration** | Components work together | Boundary contracts |
-| **Unit** | Single component correct | Leaf abstractions (interface only) |
-| **Scratch** | Prove to self | Nothing (ephemeral) |
-
-**Distribution**: Few e2e (critical paths), moderate integration (key boundaries), minimal unit (stable interfaces), many scratch (during dev).
-
----
-
-## When You DO Freeze: Test Representativeness
-
-Tests approximate production. Every divergence is a blind spot.
-
-| Divergence Type        | What It May Hide                          |
-|------------------------|-------------------------------------------|
-| Mocked dependencies    | Integration failures, API contract drift  |
-| Simplified/fake data   | Edge cases, encoding issues, scale        |
-| Different topology     | Connection lifecycle, auth flow direction |
-| Single-threaded        | Race conditions, deadlocks                |
-| Local execution        | Network latency, timeouts, DNS            |
-| Clean state each test  | State accumulation bugs                   |
-| Deterministic ordering | Order-dependent failures                  |
-
-**Not a rule—a lens.** Before taking a shortcut, ask: "What might this test NOT catch?"
-
-Document known blind spots. You can't eliminate divergence; you can be aware of it.
-
----
-
-## Common Anti-Patterns
-
-| Anti-Pattern | Problem | Fix |
-|--------------|---------|-----|
-| Testing implementation details | Freezes "how" not "what" | Test interface |
-| Redundant coverage | Same failure, multiple tests | One test at right level |
-| Defensive tests for own code | DbC violation | Assert at boundaries only |
-| Scratch tests committed | Pollutes regression suite | Keep gitignored |
-| Tests without assertions | No governance value | Add assertions or make walkthrough |
-| Over-mocking | See Test Representativeness | Use real dependencies when feasible |
-
----
-
-## When Tests Fight Development
-
-### Test blocks principled refactor
-
-1. **Validate**: Is new design actually better?
-2. **Check**: Why did test exist? External contract or implementation detail?
-3. **Decision**:
-   - External contract → adapt refactor OR version/deprecate
-   - Implementation detail → **delete test**, proceed
-   - Internal boundary → update both sides, no backwards compat
-
-**NEVER compromise architecture for test suite.**
-
-### Adding feature requires changing many tests
-
-**Diagnosis**: Tests coupled to implementation.
-
-**Fix**: Rewrite to test interface, consolidate redundant tests, or accept intentional breaking change.
-
----
-
-## Evidence Requirements
-
-**Before committing regression test**:
-- [ ] Freeze decision justified (external contract OR high harm)
-- [ ] Not redundant with higher-level test
-- [ ] Tests interface, not implementation
-- [ ] Clear failure message
-
-**Before deleting test**:
-- [ ] Coverage exists elsewhere
-- [ ] Not guarding external contract
-- [ ] Deletion rationale documented
-
----
-
-## Summary: Core Rules
-
-**MEMORIZE THESE:**
-
-1. **Every `assert` is a FREEZE DECISION** — be deliberate
-2. **External contract?** → FREEZE (commit test)
-3. **Control both sides?** → DON'T FREEZE (DbC violation)
-4. **Test blocks principled refactor?** → DELETE THE TEST
-5. **One test at right level** > multiple tests at wrong levels
-6. **Tests approximate production** — every divergence is a blind spot (document what you're NOT testing)
-
-**Test lifecycle determines commitment:**
-```
-Scratch    → prove correctness → KEEP in artifacts/ (gitignored, evidence for review)
-Regression → freeze contracts  → COMMIT (maintain forever)
-Walkthrough → demonstrate usage → COMMIT (no assertions)
-```
-
----
-
-## References
-
-- [Design by Contract](https://softwareengineering.stackexchange.com/questions/125399/differences-between-design-by-contract-and-defensive-programming)
-- [Spike Solutions (Agile/XP)](https://www.jamesshore.com/v2/books/aoad1/spike_solutions)
-- [The Practical Test Pyramid](https://martinfowler.com/articles/practical-test-pyramid.html)
-- See: the `programming` standard shipped alongside this one (Design by Contract)
+Delete a test only if: coverage exists elsewhere, it's not guarding an external contract, and the deletion rationale is documented.
