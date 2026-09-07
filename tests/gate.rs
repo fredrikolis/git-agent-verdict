@@ -436,7 +436,9 @@ fn a_shipped_standard_reaches_the_brief_without_a_file_in_the_repo() {
         "{}",
         run.out
     );
-    assert!(run.out.contains("AUTO-REJECT"), "{}", run.out);
+    // Against the file itself, not a copied fragment, so it can never drift from the real prose.
+    let shipped = include_str!("../standards/programming.md");
+    assert!(run.out.contains(shipped), "{}", run.out);
 }
 
 #[test]
