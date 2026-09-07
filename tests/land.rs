@@ -7,7 +7,6 @@ use common::{Repo, PROSE, STANDARDS};
 const CLEAN: &str = "VERDICT: reviewer=fake session=s-01 major=0 moderate=1 minor=2";
 const AIM: &str = "raise the staged file's line count";
 
-// The subject is the brief, verbatim: the one line both the reviewer and the record need.
 #[test]
 fn the_intent_becomes_the_subject() {
     let repo = Repo::new();
@@ -17,7 +16,6 @@ fn the_intent_becomes_the_subject() {
     assert_eq!(message.lines().next(), Some(AIM), "{message}");
 }
 
-// A staged path no gate reads is the maintainer's declaration, not a hole the committer can act on — and a mechanical pre-commit gate this tool cannot see may cover it more strictly than a review would. The board says which gates ran; nothing warns about the ones that did not.
 #[test]
 fn a_path_no_gate_reaches_lands_without_comment() {
     let repo = Repo::new();
@@ -30,7 +28,6 @@ fn a_path_no_gate_reaches_lands_without_comment() {
     assert!(!run.err.contains("unreviewed"), "{}", run.err);
 }
 
-// stdout is the channel an agent parses, and git's own output is the only other thing on it: a landed commit it has to infer is one it may make twice.
 #[test]
 fn the_landed_commit_reaches_stdout() {
     let repo = Repo::new();
@@ -42,7 +39,6 @@ fn the_landed_commit_reaches_stdout() {
     assert!(run.out.contains("1 file changed"), "{}", run.out);
 }
 
-// The diary is keyed on HEAD, which the commit moved, so a second run finds no step and nothing staged — which is not the hook failing to declare a gate.
 #[test]
 fn attest_after_the_commit_landed_names_the_empty_index() {
     let repo = Repo::new();
@@ -55,7 +51,6 @@ fn attest_after_the_commit_landed_names_the_empty_index() {
     assert!(run.err.contains("nothing staged"), "{}", run.err);
 }
 
-// A graded gate and an advisory one in the same hook: both land a trailer, and the hook the commit fires reads both back.
 #[test]
 fn a_graded_and_an_advisory_gate_both_land_a_trailer() {
     let repo = Repo::new();
@@ -66,7 +61,6 @@ fn a_graded_and_an_advisory_gate_both_land_a_trailer() {
     assert!(message.contains("Reviewed-prose:"), "{message}");
 }
 
-// The counts say how much; only the report says what. An author told to address a finding it cannot read has been told nothing.
 #[test]
 fn what_the_reviewer_said_reaches_the_author() {
     let repo = Repo::new();
@@ -114,7 +108,6 @@ fn a_reset_without_a_reason_is_refused() {
     assert!(run.err.contains("needs a reason"), "{}", run.err);
 }
 
-// A full review runs to hundreds of lines; an author reading the tail of the output would miss the findings above it, so the whole report is on disk and named.
 #[test]
 fn a_long_report_is_written_where_it_can_be_read_whole() {
     let repo = Repo::new();
@@ -126,7 +119,6 @@ fn a_long_report_is_written_where_it_can_be_read_whole() {
     let run = repo.attest(AIM);
     assert!(run.out.contains("standards: major=0"), "{}", run.out);
     let at = repo.last_round().expect("a round wrote somewhere");
-    // Numbered in the order the gates ran, so the name carries its place as well as its gate.
     let path = std::fs::read_dir(&at)
         .expect("the round's directory")
         .flatten()
@@ -136,7 +128,6 @@ fn a_long_report_is_written_where_it_can_be_read_whole() {
     let body = std::fs::read_to_string(&path).expect("the report");
     assert!(body.contains("finding 42"), "{body}");
     assert!(body.contains("finding 60"), "{body}");
-    // The caller is handed an index, not sixty lines: the gate, its verdict and the file that holds the rest.
     let said = repo.awaited();
     assert!(said.out.contains(&at.display().to_string()), "{}", said.out);
     assert!(

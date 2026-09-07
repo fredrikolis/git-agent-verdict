@@ -62,7 +62,7 @@ impl Repo {
         self.dir.with_extension("home")
     }
 
-    // The transcript a real agent would have written as it worked. The tool resumes a cut-short round only where one exists, so a test of that has to leave one — keyed on the directory the reviewer ran in, with everything that is not a letter or a digit written as a hyphen. That key mirrors `slug` in src/agent.rs, which cannot be called from here: this crate ships a binary and no library, so the rule is written twice and an edit to either wants the other.
+    // Mirrors `slug` in src/agent.rs, duplicated since this crate ships no library: an edit to either wants the other.
     pub fn transcript_for(&self, session: &str) {
         let slug: String = self
             .dir
@@ -75,12 +75,10 @@ impl Repo {
         std::fs::write(dir.join(format!("{session}.jsonl")), "{}\n").expect("transcript");
     }
 
-    // What the reviewer was handed on stdin, round by round: which of the three openings it was given is the whole of what a resumed round gets right or wrong.
     pub fn prompts(&self) -> String {
         self.read("prompts")
     }
 
-    // The last session the tool opened rather than resumed, which is the one a cut-short round left behind.
     pub fn last_assigned(&self) -> String {
         self.read("assigned-sessions")
             .lines()
@@ -109,22 +107,20 @@ impl Repo {
         self.capture_in(".", args)
     }
 
-    // Where the caller stands is not where a hook's paths are written from: an agent runs attest from wherever it happens to be.
     pub fn capture_in(&self, subdir: &str, args: &[&str]) -> Run {
         let cwd = self.dir.join(subdir);
         self.capture_at(&cwd, args)
     }
 
-    // The isolation every run of the binary gets, in one place: a test that assembles its own command keeps whatever was true when it was written, and reaches the host's git config or a real agent once this changes. The shell's directory and the repo under test stay told apart, so the stub reviewer is on PATH wherever the caller is standing.
+    // The one place every run is isolated from the host's git config and the real agent; a test that built its own command instead would skip it.
     fn sealed(&self, cwd: &Path, args: &[&str]) -> Command {
         let mut command = Command::new(BIN);
         command
             .current_dir(cwd)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            // A home of its own, outside the repo so nothing it holds can reach a pathspec: the tool looks under one for the reviewer's transcript and writes its long reports there, and a test that used the real one would read another session's evidence and leave its own behind.
+            // Its own HOME: the tool writes transcripts and reports under it, and the real one would leak between tests.
             .env("HOME", self.home())
-            // The stub agent goes first: the tool runs `claude` by name, so this is where a test's reviewer is substituted.
             .env(
                 "PATH",
                 format!(
@@ -146,7 +142,6 @@ impl Repo {
         }
     }
 
-    // Left running, so a test can act on it while it works: its stderr is kept because what a run says on its way out is the whole subject of those tests.
     pub fn running(&self, args: &[&str]) -> std::process::Child {
         self.sealed(&self.dir, args)
             .stderr(std::process::Stdio::piped())
@@ -167,18 +162,16 @@ impl Repo {
         self.run(msg, &["standards", "--doc", "rubric.md", "--path", "."])
     }
 
-    // The preflight takes no message file, so it cannot go through run().
     pub fn bare(&self, args: &[&str]) -> (i32, String) {
         let run = self.capture(args);
         (run.code, run.err)
     }
 
-    // Every run names the repo, because the tool no longer reads it from where the caller stands.
     pub fn root(&self) -> String {
         self.dir.to_string_lossy().into_owned()
     }
 
-    // Started, then awaited: the caller returns as soon as the round is up, so a test that wants a verdict asks the verb that reports one. What the round wrote is folded into both streams, because the round has only one: its stdout and its stderr are the same file, and which a line would have taken had somebody been watching is no longer a fact about anything.
+    // The round's log is one file, folded into both streams: which one a line was headed for is no longer knowable.
     fn round(&self, args: &[&str]) -> Run {
         let started = self.capture(args);
         if started.code != 0 {
@@ -198,7 +191,6 @@ impl Repo {
         self.capture(&["await", "--repo", &root])
     }
 
-    // Started and not awaited, for a test that acts while the round is still running.
     pub fn capture_attest(&self, intent: &str) -> Run {
         let root = self.root();
         self.capture(&["attest", "--repo", &root, "--intent", intent])
@@ -214,7 +206,6 @@ impl Repo {
         self.capture(&["abort", "--repo", &root])
     }
 
-    // Every file the round left, in one string: a caller no longer sees a review happen, so a test reads what it wrote instead.
     pub fn round_logs(&self) -> String {
         let Some(at) = self.last_round() else {
             return String::new();
@@ -236,13 +227,11 @@ impl Repo {
         (!at.is_empty()).then(|| PathBuf::from(at))
     }
 
-    // The aim is stated on the first run of a commit and held; every later run simply asks again.
     pub fn attest(&self, intent: &str) -> Run {
         let root = self.root();
         self.round(&["attest", "--repo", &root, "--intent", intent])
     }
 
-    // The whole-repo confirmation, which the verb still demands.
     pub fn audit(&self) -> Run {
         let root = self.root();
         self.round(&["audit", "--repo", &root, WHOLE])
@@ -253,7 +242,6 @@ impl Repo {
         self.round(&["attest", "--repo", &root])
     }
 
-    // The confirmation the drift refusal names, and nothing else does.
     pub fn attest_staged_only(&self, intent: &str) -> Run {
         let root = self.root();
         self.round(&["attest", "--repo", &root, "--intent", intent, STAGED_ONLY])
@@ -286,18 +274,16 @@ impl Repo {
         git(&self.dir, &["config", "core.hooksPath", "hooks"]);
     }
 
-    // The one mode that answers on stdout, so it is the one that reports all three.
     pub fn reviewer_prompt(&self, gate: &str) -> (i32, String, String) {
         let run = self.capture(&["--reviewer-prompt", gate]);
         (run.code, run.out, run.err)
     }
 
-    // The reviewer is host configuration, set per clone here: a repo that declared one would pick an agent for every maintainer.
     pub fn declare(&self, verdict: &str, gates: &[&str]) {
         self.declare_runner(&format!("printf '{verdict}\\n'"), gates);
     }
 
-    // A stub `claude` on PATH, so the tool's own argv and its reading of the answer are what a test exercises. The body prints the reviewer's text; the stub wraps it as the JSON the real one returns.
+    // The stub wraps the reviewer's text as the JSON the real `claude` CLI returns.
     pub fn declare_runner(&self, body: &str, gates: &[&str]) {
         self.hook(gates);
         let bin = self.dir.join("bin");
@@ -339,7 +325,7 @@ python3 -c 'import json, os; print(json.dumps({{"is_error": False, "result": os.
         git(&self.dir, &["config", "agent-verdict.runner", "claude"]);
     }
 
-    // The reviewer process itself, not a body wrapped in the answer it should have given: a crash is the case where there is no well-formed answer to wrap, so a test of one writes the process. The judge still answers as it always does — a reviewer that crashes is not an intent that was refused, and a run that stopped at the judge would prove neither.
+    // Unlike declare_runner, this writes the reviewer process itself: a crash has no well-formed answer to wrap. The judge still answers normally.
     pub fn declare_agent(&self, reviewer: &str, gates: &[&str]) {
         self.hook(gates);
         let bin = self.dir.join("bin");
@@ -367,7 +353,6 @@ fi
         git(&self.dir, &["config", "agent-verdict.runner", "claude"]);
     }
 
-    // What the stub answers when it is handed the judge's instructions rather than a review's.
     pub fn judge(&self, answer: &str) {
         self.write("judge-answer", answer);
     }
@@ -376,7 +361,6 @@ fi
         std::fs::read_to_string(self.dir.join(name)).unwrap_or_default()
     }
 
-    // Each gate in turn until attest says there is nothing left, then the verb that lands it.
     pub fn attest_until(&self, intent: &str, rounds: usize) -> Run {
         let mut last = self.attest(intent);
         for _ in 1..rounds {
@@ -407,7 +391,6 @@ fi
         String::from_utf8_lossy(&out.stdout).into_owned()
     }
 
-    // Continuing a commit whose aim is already recorded.
     pub fn landed_again(&self, rounds: usize) -> String {
         let mut last = self.again();
         for _ in 1..rounds {
@@ -421,14 +404,12 @@ fi
         self.head_message()
     }
 
-    // The whole protocol in one call: review every gate, then commit, and answer with the message that landed.
     pub fn landed(&self, intent: &str, rounds: usize) -> String {
         let run = self.attest_until(intent, rounds);
         assert!(self.committed(), "no commit landed: {}", run.err);
         self.head_message()
     }
 
-    // Read the way an author can read it. Coupled to the diary's layout on purpose: pasting a blocked review's own token is the forgery the gate has to survive.
     pub fn issued_token(&self) -> String {
         let dir = self.dir.join(".git/agent-verdict");
         let head = std::fs::read_dir(&dir)
@@ -442,7 +423,6 @@ fi
         last.split('\t').nth(1).expect("a token").to_string()
     }
 
-    // Written beside the worktree, not in it: such a path can never appear in the index.
     pub fn outside_doc(&self) -> PathBuf {
         let path = self.dir.with_extension("outside.md");
         std::fs::write(&path, "the standard").expect("write");
@@ -471,7 +451,7 @@ pub fn pipe(at: &std::path::Path) -> std::path::PathBuf {
     at.to_path_buf()
 }
 
-// Whatever the far end wrote when it got there, which is how a test names the process it is about to make assertions on. The read blocks until that end opens, and the deadline is on a channel rather than on the read: a run that dies before reaching that moment leaves nobody to open the pipe, and the test has to fail rather than hang.
+// The timeout is on the channel, not the read: a run that dies before opening the pipe must fail, not hang.
 pub fn arrived_at(pipe: &std::path::Path) -> Option<String> {
     let (told, arrival) = std::sync::mpsc::channel();
     let path = pipe.to_path_buf();
