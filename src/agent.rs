@@ -5,7 +5,7 @@ use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-// What a run gives back. The model and the session are read from the agent rather than asked of it: one it would have to guess at, the other it cannot know. Why it stopped comes back too, unused until an answer turns out to carry no verdict — which is the moment it says whether the reviewer was cut off or simply ignored its brief.
+// stop_reason is unused until an answer carries no verdict, then says whether the reviewer was cut off or ignored its brief.
 pub struct Answer {
     pub text: String,
     pub reviewer: String,
@@ -13,7 +13,6 @@ pub struct Answer {
     pub stop_reason: String,
 }
 
-// The reviewer a round is handed to: a session nothing has used yet, or one an earlier round left behind. Named before the spawn either way, so the caller can write it down while there is still something to write it down about.
 pub enum Session {
     Fresh(String),
     Resume(String),
@@ -34,21 +33,18 @@ impl Session {
     }
 }
 
-// What a round is bought under: which model, how long it may take, and whether it may write. Together because they travel together — a gate declares all three and none of them is a property of the question being asked.
 pub struct Terms<'a> {
     pub model: Option<&'a str>,
     pub ceiling: Duration,
     pub read_only: bool,
 }
 
-// What an agent is being asked for, not which model answers it: which model is cheap enough for a one-line question is knowledge about that agent, and it lives with the code that drives it.
 #[derive(Clone, Copy)]
 pub enum Role {
     Review,
     JudgeIntent,
 }
 
-// Named, not spelled out: resuming, system prompts and machine-readable output differ enough between agents that a repo cannot express them in one command line, so the difference lives here. One name so far.
 pub struct Agent;
 
 impl Agent {
@@ -74,14 +70,12 @@ impl Agent {
     }
 }
 
-// Through a file, because argv and a pipe both have a ceiling the standing instructions do not: they carry every rubric inlined.
 fn system_file(text: &str) -> Result<std::path::PathBuf, String> {
     let path = git::git_path("AGENT_VERDICT_SYSTEM")?;
     std::fs::write(&path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
     Ok(path)
 }
 
-// A review's model is the repo's call and passes through untouched — never checked against a list this build would have to keep current. Judging one line of text is not worth the model a review is worth, and which model is small enough for it is claude's own business.
 fn claude_model(role: Role, asked: Option<&str>) -> Option<&str> {
     match role {
         Role::Review => asked,
@@ -89,15 +83,15 @@ fn claude_model(role: Role, asked: Option<&str>) -> Option<&str> {
     }
 }
 
-// Chosen here and handed to the agent, rather than read back out of its answer. The two are the same identifier and a world apart in when they are known: read back, it arrives in the final answer, which is the one thing a run that crashed, hung or was killed never produced — so the id would be available in exactly the cases with nothing to use it for. Assigned first, it is known before anything can go wrong, and the transcript it names can be pointed at when something does.
+// Assigned before the spawn, not read back from the answer: a crashed or killed run never produces one, but the id still exists to name its transcript.
 pub fn fresh_id() -> String {
     let mut bytes = [0u8; 16];
-    // Exactly sixteen bytes, taken by hand: the device never reaches an end, and anything that reads it to one reads for ever.
+    // /dev/urandom never reaches EOF, so read_exact rather than a read that waits for one.
     let taken =
         std::fs::File::open("/dev/urandom").and_then(|mut urandom| urandom.read_exact(&mut bytes));
     match taken {
         Ok(()) => {}
-        // A box without /dev/urandom still needs an id no live session already holds; the clock and the pid give one without pretending to be random.
+        // No /dev/urandom: clock+pid need only avoid colliding with a live session, not be random.
         Err(_) => {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -106,7 +100,7 @@ pub fn fresh_id() -> String {
             bytes[8..12].copy_from_slice(&std::process::id().to_le_bytes());
         }
     }
-    // Version 4 and the variant bits, because the flag takes a uuid and refuses anything that is merely uuid-shaped.
+    // Version 4 + variant bits: --session-id requires a real uuid, not merely uuid-shaped bytes.
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
@@ -131,7 +125,6 @@ fn claude(
     let mut command = Command::new("claude");
     command.args(["-p", "--output-format", "json"]);
     command.arg("--append-system-prompt-file").arg(&file);
-    // The same identifier under either flag: one opens the session, the other takes up the one already holding everything this reviewer had read.
     match session {
         Session::Fresh(id) => command.args(["--session-id", id]),
         Session::Resume(id) => command.args(["--resume", id]),
@@ -139,7 +132,7 @@ fn claude(
     if let Some(model) = claude_model(role, terms.model) {
         command.args(["--model", model]);
     }
-    // Always stated, never left to the default, and never widened past what the host already allows. A reviewer runs headless, so a prompt is a wait with no end; dontAsk resolves that by refusing what would have been asked rather than by granting it, which leaves the host's own settings in charge of what a reviewer may do. Read-only narrows it further: a gate declaring it is reviewing a tree somebody else is working in, and a reviewer that writes there is a second author nobody asked for.
+    // dontAsk denies whatever would have prompted, since a headless run has no one to ask; plan mode additionally keeps a read-only reviewer from writing.
     let mode = if terms.read_only { "plan" } else { "dontAsk" };
     command.args(["--permission-mode", mode]);
     let told = |detail: String| with_transcript(&detail, session.id());
@@ -148,20 +141,18 @@ fn claude(
     read_claude(&said).map_err(told)
 }
 
-// Both halves of what the agent said. Its stderr is kept whatever the exit status, because the two do not agree: an agent can crash on stderr and still exit 0, and then the only account of what went wrong is the half a caller that trusts the status throws away.
+// stderr is kept regardless of exit status: an agent can crash on stderr and still exit 0.
 struct Said {
     out: String,
     err: String,
 }
 
-// Far enough apart that a long review is a handful of lines, close enough that a killed one is placed to the minute. Against a ceiling short enough that a minute would pass in silence, it is a quarter of the ceiling instead: the point is that the wait is accounted for, not that it is accounted for every sixty seconds.
 const HEARTBEAT: Duration = Duration::from_secs(60);
 
 fn heartbeat(ceiling: Duration) -> Duration {
     HEARTBEAT.min(ceiling / 4)
 }
 
-// The whole of it, then a limit: an agent's crash is often one line and its answer is a page, and a diagnosis cut off mid-sentence sends the author after the wrong fault.
 const KEPT: usize = 2000;
 
 fn clipped(text: &str) -> String {
@@ -174,7 +165,7 @@ fn clipped(text: &str) -> String {
 
 type Seen = std::sync::Arc<std::sync::Mutex<Vec<u8>>>;
 
-// Drained from their own threads, because both pipes are bounded: an agent that fills either one blocks there until a read this side cannot reach while it waits for the process to exit. Into a buffer shared with this side rather than returned at the end, so what has arrived can be read without waiting for the end to come — a killed agent's pipe is held open by whatever it spawned, and a timeout that waits for that bounds nothing.
+// Both pipes are bounded, so drained on their own threads into a shared buffer readable before EOF — a killed agent's pipe can stay open in whatever it spawned.
 fn drain(pipe: Option<impl Read + Send + 'static>) -> (std::sync::mpsc::Receiver<()>, Seen) {
     let seen: Seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let filling = std::sync::Arc::clone(&seen);
@@ -182,7 +173,6 @@ fn drain(pipe: Option<impl Read + Send + 'static>) -> (std::sync::mpsc::Receiver
     std::thread::spawn(move || {
         if let Some(mut pipe) = pipe {
             let mut chunk = [0u8; 8192];
-            // Chunked, and the lock taken only to append: held across the read it would be a lock on the agent's silence.
             while let Ok(n) = pipe.read(&mut chunk) {
                 if n == 0 {
                     break;
@@ -195,12 +185,10 @@ fn drain(pipe: Option<impl Read + Send + 'static>) -> (std::sync::mpsc::Receiver
     (drained, seen)
 }
 
-// A reader thread that panicked mid-append leaves what it had; nothing here is worth losing a diagnosis over.
 fn hold(seen: &Seen) -> std::sync::MutexGuard<'_, Vec<u8>> {
     seen.lock().unwrap_or_else(|held| held.into_inner())
 }
 
-// Long enough that draining an answer already at EOF finishes inside it many times over, short enough that a pipe nothing will ever close is not mistaken for one still filling.
 const SETTLING: Duration = Duration::from_secs(5);
 
 fn settled(drained: &std::sync::mpsc::Receiver<()>, by: Instant) {
@@ -211,14 +199,13 @@ fn text_of(seen: &Seen) -> String {
     String::from_utf8_lossy(&hold(seen)).into_owned()
 }
 
-// Read only after the ceiling has already fired, never to decide that it should. These are strings the agent happens to write today, not an interface it promises, so a miss costs the message its last sentence and nothing more. Deciding a kill on them would spend a paid review on a guess.
+// Read only after the ceiling fires, never to decide a kill: undocumented CLI text, not a contract.
 const DENIED: [&str; 3] = [
     "denied by the Claude Code auto mode classifier",
     "doesn't want to proceed with this tool use",
     "Claude requested permissions to use",
 ];
 
-// The tail only: a transcript runs to megabytes and the answer is in the last thing that happened.
 fn stalled_on(session: &str) -> Option<String> {
     let text = std::fs::read_to_string(transcript(session)?).ok()?;
     let tail: String = text.lines().rev().take(6).collect::<Vec<_>>().join(" ");
@@ -228,19 +215,16 @@ fn stalled_on(session: &str) -> Option<String> {
         .map(|mark| (*mark).to_string())
 }
 
-// Timed out, or the waiter died holding no status. They are not the same failure and are not reported as one.
 enum Unanswered {
     Ceiling,
     Lost,
 }
 
-// The exit arrives on a channel rather than being asked for every fraction of a second: the only wakeups left are the heartbeats themselves, which have work to do. Every wait is narrated, the judge's included: it shares the review's ceiling now, and a question that hangs under it would otherwise sit in silence for as long as a review may take.
 fn awaited(exited: &std::sync::mpsc::Receiver<bool>, ceiling: Duration) -> Result<(), Unanswered> {
     let started = Instant::now();
     loop {
         let left = ceiling.saturating_sub(started.elapsed());
         if left.is_zero() {
-            // Asked once more before giving up: an agent that finished while this was deciding the ceiling had run out left its status in the channel, and reporting a kill over an answer already in hand throws away a review that was paid for and delivered.
             return match exited.try_recv() {
                 Ok(true) => Ok(()),
                 Ok(false) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -250,7 +234,6 @@ fn awaited(exited: &std::sync::mpsc::Receiver<bool>, ceiling: Duration) -> Resul
             };
         }
         match exited.recv_timeout(heartbeat(ceiling).min(left)) {
-            // False is the watcher saying it could not observe the child at all, which is not the child answering.
             Ok(watched) => {
                 return if watched {
                     Ok(())
@@ -266,7 +249,7 @@ fn awaited(exited: &std::sync::mpsc::Receiver<bool>, ceiling: Duration) -> Resul
     }
 }
 
-// The group, not the process: the reviewer leads its own, and what it spawned holds the repo's claim until it exits. Signalled by hand because the child belongs to the thread waiting on it.
+// Kills the whole process group (negative pid): the reviewer leads it, and whatever it spawned still holds the repo's claim.
 fn kill(pid: u32) {
     unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
 }
@@ -278,7 +261,6 @@ fn piped(
     ceiling: Duration,
     session: &str,
 ) -> Result<Said, String> {
-    // Its own group, so ending it at the ceiling ends everything it started. Set for every agent, because a judge that hangs has to be endable too.
     {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
@@ -301,7 +283,7 @@ fn piped(
     crate::signals::spawned(role, pid);
     let started = Instant::now();
     let (exit, exited) = std::sync::mpsc::channel();
-    // Observed without reaping, and reaped only after the group is ended. A leader that has been reaped frees its pid, and with it the group id: signalling that number afterwards would reach whatever the kernel has since given it. Left as a zombie, the leader holds both reserved until this run is finished with them.
+    // Not reaped here: reaping frees the pid and its group id, and a kill afterward could hit whatever the kernel reused them for.
     std::thread::spawn(move || {
         let mut seen: libc::siginfo_t = unsafe { std::mem::zeroed() };
         let watched =
@@ -310,18 +292,16 @@ fn piped(
     });
     let status = match awaited(&exited, ceiling) {
         Ok(()) => {
-            // Bounded, because the write end outlives the agent wherever it left something running that inherited it: a wait for a pipe a third party holds open is a wait with no end, and this exists to impose one. One deadline covers both, so a holder on each pipe costs the grace once. At EOF, which is the normal case, both return at once.
             let by = Instant::now() + SETTLING;
             settled(&read_out, by);
             settled(&read_err, by);
-            // The review is over the moment its reviewer answers, so nothing it started outlives it. A helper left running holds the repo's claim, which it inherited and cannot be asked to give back, and a repo no command can enter is worse than the race the claim prevents.
+            // Killed even on success: a helper the reviewer spawned would otherwise keep holding the repo's claim.
             kill(pid);
             let ended = child.wait();
             crate::signals::done();
             ended.map_err(|e| format!("the reviewer did not finish: {e}"))?
         }
         Err(Unanswered::Lost) => {
-            // The watcher could not see the child at all, and this run is about to stop reporting on it: left alone it would hold the repo with nobody watching the ceiling that was supposed to end it.
             kill(pid);
             let _ = child.wait();
             crate::signals::done();
@@ -334,7 +314,6 @@ fn piped(
             kill(pid);
             let _ = child.wait();
             crate::signals::done();
-            // Nothing is waited for on this path: an agent killed at the ceiling leaves threads blocked on a prompt it never read and on pipes whatever it spawned still holds open, and this run has a refusal to deliver now. What it had managed to say is in the shared buffer, which is worth more than the timeout alone.
             let mut said = format!(
             "the reviewer ran {}s without answering and was killed at the {}s ceiling.\nRaise it with --timeout <minutes> if a review here is genuinely this long; otherwise this is an agent that has stopped rather than one that is thinking.",
             started.elapsed().as_secs(),
@@ -352,7 +331,6 @@ fn piped(
         out: text_of(&out),
         err: text_of(&err),
     };
-    // An agent that answers without reading closes the pipe first; that is its business, and the answer it prints is still the answer.
     match writer.join() {
         Err(_) => return Err("the prompt was never written to the reviewer".to_string()),
         Ok(Err(e)) if e.kind() != std::io::ErrorKind::BrokenPipe => {
@@ -360,7 +338,6 @@ fn piped(
         }
         Ok(_) => {}
     }
-    // Carried out rather than left on the terminal: a refusal it makes before answering — an unknown model is the one that matters — is said only here, and a caller that reports an exit status alone has thrown away the whole diagnosis.
     if !status.success() {
         let noise = clipped(&said.err);
         if noise.is_empty() {
@@ -371,7 +348,7 @@ fn piped(
     Ok(said)
 }
 
-// The agent keys a transcript on the directory it ran in, with everything that is not a letter or a digit written as a hyphen. Derived rather than asked for — there is nothing to ask — and therefore never trusted: what this returns is checked against the filesystem before it is named.
+// Mirrors how the agent derives its own project-dir name from cwd; never trusted blindly, only ever checked against the filesystem.
 fn slug(dir: &std::path::Path) -> String {
     dir.to_string_lossy()
         .chars()
@@ -379,7 +356,6 @@ fn slug(dir: &std::path::Path) -> String {
         .collect()
 }
 
-// Where the agent will write, derived and never checked: it is named to a caller before the review starts, which is before there is any file to find.
 pub fn transcript_path(session: &str) -> Option<std::path::PathBuf> {
     let home = std::env::var("HOME").ok()?;
     Some(
@@ -391,7 +367,6 @@ pub fn transcript_path(session: &str) -> Option<std::path::PathBuf> {
     )
 }
 
-// The reviewer's own account of the round: every file it read, every tool that answered it, and whatever it was in the middle of when it stopped. This tool reports what the reviewer said; the transcript is what it did, and after a failure that is the difference between a diagnosis and a shrug. Checked here, because a path named in an error has to be one that exists.
 pub fn transcript(session: &str) -> Option<std::path::PathBuf> {
     let home = std::env::var("HOME").ok()?;
     let projects = std::path::Path::new(&home).join(".claude").join("projects");
@@ -400,7 +375,7 @@ pub fn transcript(session: &str) -> Option<std::path::PathBuf> {
     if derived.is_file() {
         return Some(derived);
     }
-    // A session is unique across every project the agent has ever run in, so a miss on the derived name is answered by looking rather than by guessing at the rule a second time. The layout is the agent's, and it is free to move it.
+    // Session ids are unique across every project, so a derived-path miss falls back to scanning rather than re-guessing the layout.
     std::fs::read_dir(&projects)
         .ok()?
         .flatten()
@@ -408,13 +383,12 @@ pub fn transcript(session: &str) -> Option<std::path::PathBuf> {
         .find(|path| path.is_file())
 }
 
-// How long ago the reviewer last wrote to its own transcript, which is the closest thing to a time of death this side holds: a run killed by something else writes nothing on its way out, so the last line the agent managed is what dates the end. None where no transcript was ever written.
+// Closest thing to a time of death this side holds: something that kills the agent outright writes nothing on the way out.
 pub fn last_wrote(session: &str) -> Option<u64> {
     let written = transcript(session)?.metadata().ok()?.modified().ok()?;
     Some(written.elapsed().ok()?.as_secs())
 }
 
-// Named only where it exists: a path invented for a message sends the author to an empty prompt, which is worse than saying nothing.
 fn with_transcript(detail: &str, session: &str) -> String {
     match transcript(session) {
         Some(path) => format!(
@@ -425,7 +399,6 @@ fn with_transcript(detail: &str, session: &str) -> String {
     }
 }
 
-// What the agent muttered while failing, kept beside the failure. An agent that exits 0 having crashed leaves its whole account here, and a message built from the exit status alone reports the symptom this side saw rather than the fault that side had.
 fn with_noise(detail: &str, err: &str) -> String {
     let noise = clipped(err);
     if noise.is_empty() {
@@ -455,7 +428,7 @@ fn read_claude(said: &Said) -> Result<Answer, String> {
     let session = json["session_id"]
         .as_str()
         .ok_or_else(|| with_noise("the reviewer's answer has no session_id field", &said.err))?;
-    // Which model actually answered, rather than which one was asked for: a fallback would otherwise reach the trailer under the name of the model that never ran.
+    // The model that actually ran, not the one requested — a fallback shouldn't be attributed to a model that never ran.
     let reviewer = json["modelUsage"]
         .as_object()
         .and_then(|used| used.keys().next().cloned())
@@ -472,7 +445,6 @@ fn read_claude(said: &Said) -> Result<Answer, String> {
 mod tests {
     use super::slug;
 
-    // Checked against a directory the agent has really keyed a transcript on: /home/me/src/my_test.dir v2 becomes -home-me-src-my-test-dir-v2, so a dot, an underscore and a space are hyphens exactly as a separator is.
     #[test]
     fn a_directory_is_keyed_with_every_other_character_as_a_hyphen() {
         assert_eq!(
@@ -484,6 +456,4 @@ mod tests {
             "-home-me--claude"
         );
     }
-
-    // The flag takes a uuid and refuses what is merely uuid-shaped, and two rounds must never be handed one id.
 }

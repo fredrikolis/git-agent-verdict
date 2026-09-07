@@ -35,19 +35,19 @@ pub fn staged(paths: &[String]) -> Result<Vec<String>, String> {
     Ok(nul_separated(&run(&args)?))
 }
 
-// The worktree against the index, where staged() asks the index against HEAD. A file that differs here is one the reviewer opens and the commit will not carry.
+// Worktree against index, where staged() is index against HEAD.
 pub fn unstaged(paths: &[String]) -> Result<Vec<String>, String> {
     let args = with_pathspec(&["diff", "--name-only", "-z"], paths);
     Ok(nul_separated(&run(&args)?))
 }
 
-// Every file a gate reaches, committed rather than changed: what `audit` reviews, where `staged` is what `attest` reviews.
+// What `audit` reviews, where `staged` is what `attest` reviews.
 pub fn tracked(paths: &[String]) -> Result<Vec<String>, String> {
     let args = with_pathspec(&["ls-files", "-z"], paths);
     Ok(nul_separated(&run(&args)?))
 }
 
-// A literal pathspec matching nothing in the index is a typo; a glob is allowed to match nothing.
+// A literal matching nothing is a typo; a glob is allowed to match nothing.
 pub fn unmatched_literals(paths: &[String]) -> Result<Vec<String>, String> {
     let mut bad = Vec::new();
     for spec in paths {
@@ -67,7 +67,6 @@ pub fn toplevel() -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out).trim().to_string())
 }
 
-// Repo-relative form of a doc, or None when it lives outside the worktree and can never be staged.
 pub fn relative_to_root(doc: &str) -> Option<String> {
     let root = std::path::Path::new(&toplevel().ok()?)
         .canonicalize()
@@ -86,14 +85,12 @@ pub fn hook_path() -> Result<String, String> {
     Err(format!("no commit-msg hook at {path}"))
 }
 
-// Read through git so the whole precedence ladder applies: --global is the machine's default and --local overrides it per clone, neither of which a repo can commit for its maintainers.
 pub fn config(key: &str) -> Option<String> {
     let out = run(&["config", "--get", key]).ok()?;
     let value = String::from_utf8_lossy(&out).trim().to_string();
     Some(value).filter(|v| !v.is_empty())
 }
 
-// Resolved through git so a worktree or a submodule lands in its own git dir rather than the superproject's.
 pub fn git_path(relative: &str) -> Result<std::path::PathBuf, String> {
     let out = run(&["rev-parse", "--git-path", relative])?;
     let path = String::from_utf8_lossy(&out).trim().to_string();
@@ -121,7 +118,6 @@ pub fn commit(message: &str) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out?).into_owned())
 }
 
-// Confirmed from git's own state, so a hand-typed subject cannot forge the exemption.
 pub fn in_progress(marker: &str) -> bool {
     let Ok(out) = run(&["rev-parse", "--git-path", marker]) else {
         return false;

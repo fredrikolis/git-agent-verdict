@@ -7,7 +7,6 @@ use crate::report;
 use crate::state;
 use crate::trailer::{self, Verdict};
 
-// git writes these subjects itself; they carry no review and must not be blocked.
 fn auto_generated(raw: &str) -> bool {
     let subject = raw
         .lines()
@@ -20,7 +19,7 @@ fn auto_generated(raw: &str) -> bool {
     }
 }
 
-// Repo-relative, as git matches it, and None for a path outside the worktree: git goes fatal on a pathspec it cannot place, and a rubric kept outside the repo — the $KB case the setup guide documents — can never be staged, so there is nothing to ask git about.
+// None for a path outside the worktree (the $KB case): git goes fatal on a pathspec it can't place, and it can never be staged anyway.
 fn in_repo(path: &str) -> Option<String> {
     if std::path::Path::new(path).is_absolute() {
         git::relative_to_root(path)
@@ -29,7 +28,7 @@ fn in_repo(path: &str) -> Option<String> {
     }
 }
 
-// What the repo gates by: the hook naming the gates, and every measure they judge against. A change to either is reviewed by the maintainer who made it, which is no review at all — so it is maintenance, out of scope here, and lands on its own.
+// A change to the hook or its rubrics is reviewed by the maintainer who made it — no review at all — so it's maintenance, out of scope here.
 pub fn machinery_staged() -> Result<Vec<String>, String> {
     let mut watched: Vec<String> = Vec::new();
     if let Some(hook) = git::hook_path().ok().and_then(|h| in_repo(&h)) {
@@ -51,7 +50,7 @@ pub fn machinery_staged() -> Result<Vec<String>, String> {
     Ok(watched.into_iter().filter(|w| staged.contains(w)).collect())
 }
 
-// The one edit this tool makes to a message: every commit in a repo gated this way is agent-written, so a fixed attribution line is constant and carries nothing.
+// The one edit this tool makes to a message: a fixed attribution line on an agent-written commit carries no information.
 fn drop_agent_coauthor(msg_file: &str, raw: &str) -> Result<String, String> {
     if !raw.lines().any(trailer::is_agent_coauthor) {
         return Ok(raw.to_string());
@@ -66,7 +65,7 @@ fn drop_agent_coauthor(msg_file: &str, raw: &str) -> Result<String, String> {
     Ok(text)
 }
 
-// The counts in the message are compared against the ones the reviewer actually reported. This is the only check that can catch a trailer that reads better than its review did.
+// Catches a trailer edited to read better than the review it claims actually went.
 fn traced(gate: &str, verdicts: &[Verdict]) -> Result<bool, String> {
     for verdict in verdicts {
         let Some(record) = state::lookup(&verdict.token)? else {

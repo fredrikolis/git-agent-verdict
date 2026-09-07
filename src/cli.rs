@@ -18,12 +18,11 @@ pub const USAGE: &str = concat!(
     "       git-agent-verdict --repo-setup-guide"
 );
 
-// Undocumented on purpose and in no usage line: the refusal below is the only place an agent meets it, which is the moment the reminder is worth anything. It states what the caller means to spend, and an agent reaching for `audit` because `attest` refused is exactly the mistake it stops.
+// Undocumented and unlisted: an agent meets it only in the refusal it answers, the one place it's worth anything.
 pub const WHOLE: &str = "--confirm-reviewing-the-whole-repo-not-a-commit";
-// Undocumented on purpose: it is named in the refusal it answers and nowhere else. A caller that has not just read why the index and the working tree disagree has no business asserting that they are meant to.
+// Undocumented: named only in the refusal it answers, so asserting it presumes you just read why.
 pub const STAGED_ONLY: &str = "--confirm-attesting-the-staged-version-not-the-working-tree";
 
-// Verbs a dev agent types, as against a declaration a hook carries: mistyping one is not a repo whose wiring has gone stale, so the setup guide would be noise.
 pub fn agent_verb(args: &[String]) -> bool {
     matches!(
         args.first().map(String::as_str),
@@ -31,13 +30,12 @@ pub fn agent_verb(args: &[String]) -> bool {
     )
 }
 
-// Wide enough for one real change's aim, and narrow enough that two aims will not fit: the reviewer refuses a brief that argues, so this bounds the change rather than the prose.
+// Narrow enough two aims won't fit, wide enough for one: bounds the change, not the prose.
 pub const INTENT_LIMIT: usize = 300;
 
-// Above the longest review anyone has watched finish, and far enough above it that hitting this is evidence of a reviewer that has stopped rather than one that is thinking. A ceiling the tool owns: without one the only thing that ends a hung agent is whatever shell it was started in, which kills it with no elapsed time, no signal and nothing said.
+// Past the longest review anyone's watched finish: beyond it a reviewer has stopped, not still thinking. Without this, only the shell ever kills a hung one.
 const REVIEW_CEILING: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
-// Minutes, because that is the unit a review is discussed in. The suffixes are for a test that cannot spend a minute proving a hang is caught.
 fn ceiling(text: &str) -> Result<std::time::Duration, String> {
     let malformed = || {
         format!(
@@ -54,7 +52,7 @@ fn ceiling(text: &str) -> Result<std::time::Duration, String> {
         'm' => 60,
         _ => 60 * 60,
     };
-    // A ceiling of nothing is every reviewer killed before it can answer, which reads as the agent failing rather than as the flag.
+    // Zero would kill every reviewer before it answers, reading as the agent failing rather than the flag.
     let total = count
         .checked_mul(seconds)
         .filter(|total| *total > 0)
@@ -64,7 +62,7 @@ fn ceiling(text: &str) -> Result<std::time::Duration, String> {
     Ok(std::time::Duration::from_secs(total))
 }
 
-// How a gate briefs its reviewer: which template it reads. Held apart because --reviewer-prompt has one without a message, a pathspec or a decision.
+// Held apart because --reviewer-prompt needs one without a message, a pathspec or a decision.
 #[derive(Default)]
 pub struct Brief {
     pub simple: bool,
@@ -85,29 +83,26 @@ pub struct Invocation {
 
 pub enum Mode {
     Gate(Box<Invocation>),
-    // The repo comes first because nothing else means anything without it: the verb acts on the tree named here and never on the one the shell is standing in. The ceiling comes last because it is the one field with an answer when the author gives none.
+    // repo first: the verb acts on the tree named here, never the shell's own directory.
     Attest(String, Option<String>, std::time::Duration, bool),
     Reset(String, String),
     Await(String),
     Abort(String),
     Commit(String),
-    // No intent, because there is no commit: an audit reviews the tree against the rubrics and lands nothing.
     Audit(String, std::time::Duration),
     ReviewerPrompt(String),
     RequireVersion(String),
     RepoSetupGuide,
-    // No name lists them; a name prints that one whole. A gate declares a standard it cannot read, so there has to be a way to read it.
     Standards(Option<String>),
 }
 
-// Resolved once, here: the reviewer block promises absolute paths, and a path that does not resolve exempts itself in silence — a doc from its gate, an override from the template it replaces.
 fn canonical(flag: &str, path: &str) -> Result<String, String> {
     std::fs::canonicalize(path)
         .map(|p| p.to_string_lossy().into_owned())
         .map_err(|e| format!("{flag} {path}: {e}"))
 }
 
-// A trailer key is one word. Git parses no key carrying a space, so a gate named with one earns a trailer its own gate can never read back, and the remedy it prints is the line it just refused.
+// A trailer key is one word: git parses none with a space, so a gate named with one could never read its own trailer back.
 fn gate_name(name: &str) -> Result<String, String> {
     let usable = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.');
     if name.is_empty() || !name.chars().all(usable) {
@@ -118,7 +113,7 @@ fn gate_name(name: &str) -> Result<String, String> {
     Ok(name.to_string())
 }
 
-// A measure stated in the hook rather than in a file the reviewer must open. Multi-line, and `-` reads stdin, so a rubric a command prints arrives whole at any size: the declaration listing escapes what would otherwise split a gate across lines.
+// Multi-line and stdin-fed (`-`), so a rubric a command prints arrives whole regardless of size.
 fn rule(text: String) -> Result<String, String> {
     if text.trim().is_empty() {
         return Err("--rule is empty".to_string());
@@ -140,7 +135,7 @@ fn canonical_docs(docs: &[String]) -> Result<Vec<String>, String> {
     docs.iter().map(|d| canonical("--doc", d)).collect()
 }
 
-// Dead by construction, not merely idle today: a pathspec that resolves to a file is a literal, and a gate built from nothing but its own rubrics meets its own measure or nothing. A glob resolves to no file and reaches whatever is added later, so it is never this.
+// Dead by construction: a pathspec resolving to a file is a literal, met only by rubrics on itself. A glob might catch later additions.
 fn inert(docs: &[String], paths: &[String]) -> bool {
     !docs.is_empty()
         && paths.iter().all(|p| {
@@ -170,7 +165,6 @@ struct Parsed {
     model: Option<String>,
 }
 
-// Every list is a repeated singular flag: no variadic can absorb the token meant for its neighbour.
 fn collect(args: impl Iterator<Item = String>) -> Result<Parsed, String> {
     let mut p = Parsed::default();
     let mut args = args;
@@ -198,7 +192,7 @@ fn collect(args: impl Iterator<Item = String>) -> Result<Parsed, String> {
                 let path = args.next().ok_or("--override-prompt needs a path")?;
                 p.brief.prompt = Some(canonical("--override-prompt", &path)?);
             }
-            // Checked here rather than at brief time: a gate declaring a name this build does not ship should fail the hook that declares it, not the review it was going to pay for.
+            // Checked here, not at brief time: an unshipped --standard should fail the hook, not the paid-for review.
             "--standard" => {
                 let name = args.next().ok_or_else(|| {
                     format!("--standard needs one of: {}", crate::brief::shipped_names())
@@ -209,7 +203,6 @@ fn collect(args: impl Iterator<Item = String>) -> Result<Parsed, String> {
                 p.standards.push(name);
             }
             "--doc" => p.docs.push(args.next().ok_or("--doc needs a path")?),
-            // `-` is the whole point of a heredoc: a rubric a command prints can be any size, and argv cannot.
             "--rule" => {
                 let text = args.next().ok_or("--rule needs text, or - to read stdin")?;
                 p.rules.push(if text == "-" {
@@ -226,7 +219,6 @@ fn collect(args: impl Iterator<Item = String>) -> Result<Parsed, String> {
     Ok(p)
 }
 
-// Each mode names what it takes; anything else given is a mistyped invocation rather than a mode, and saying so beats acting on half of it.
 fn only(detail: &str, p: &Parsed, takes: &[&str]) -> Result<(), String> {
     let given = [
         ("--repo-setup-guide", p.setup_guide),
@@ -257,10 +249,10 @@ fn only(detail: &str, p: &Parsed, takes: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
-// Named, never inferred: a shell an agent has held open for an hour is often not standing where the agent believes, and a verb that reads its target from that shell reviews whichever repo the mistake landed in. What is asserted here reaches the transcript, where it can be read back afterwards.
+// Named, never inferred: a shell an agent held open for an hour may not be where it believes. Asserted here, it reaches the transcript.
 fn target(p: &Parsed) -> Result<String, String> {
     let Some(path) = p.repo.clone() else {
-        // No value offered, deliberately: whatever this printed would be derived from the same shell the flag exists to distrust, and pasted straight back.
+        // No value offered: it would just be derived from the same shell this flag exists to distrust.
         return Err(
             "--repo <absolute path to the repo root> is required, and the shell's directory is not consulted"
                 .to_string(),
@@ -288,7 +280,6 @@ fn attest(p: &Parsed) -> Result<Mode, String> {
         )?;
         return Ok(Mode::Attest(repo, None, ceiling, p.staged_only));
     };
-    // An aim that will not fit is usually two aims: the limit is a decomposition check as much as a brevity one.
     if intent.contains('\n') || intent.chars().count() > INTENT_LIMIT {
         let detail = format!(
             "--intent: one line, at most {INTENT_LIMIT} characters, stating what the change does.\nAn intent that does not fit describes more than one change; commit them separately: unstage all but one with `git restore --staged <paths>`, attest what remains, then repeat."
@@ -306,7 +297,7 @@ fn attest(p: &Parsed) -> Result<Mode, String> {
     Ok(Mode::Attest(repo, Some(intent), ceiling, p.staged_only))
 }
 
-// Said in full at the one moment it is worth reading: an agent that reached for this verb because attest refused it needs the difference between them, not a flag name.
+// Said in full: an agent reaching for this verb because attest refused needs the distinction, not a flag name.
 const NOT_A_COMMIT: &str = "audit reviews every file each gate reaches, not the staged diff. \
 One full review per gate, and it lands nothing.\n\nUse it after a standard changes, to find what the \
 new criteria reject in code no commit is modifying. Normal development is attested from the diff: that \
@@ -314,7 +305,6 @@ is what `attest` is for, and it is what the hook demands at commit time.\n\nTo c
 --confirm-reviewing-the-whole-repo-not-a-commit";
 
 fn audit(p: &Parsed) -> Result<Mode, String> {
-    // What this verb does differently is the thing a caller reaching for it by mistake needs first.
     if !p.whole {
         return Err(NOT_A_COMMIT.to_string());
     }
@@ -331,7 +321,6 @@ fn audit(p: &Parsed) -> Result<Mode, String> {
     Ok(Mode::Audit(repo, ceiling))
 }
 
-// Neither spends anything, so neither takes a ceiling, a model or a rubric: one waits for a round, the other ends it.
 fn waiting(p: &Parsed) -> Result<Mode, String> {
     let repo = target(p)?;
     only(
@@ -362,7 +351,6 @@ fn ending(p: &Parsed) -> Result<Mode, String> {
     Ok(Mode::Abort(repo))
 }
 
-// The reason is the whole point of the verb, so it is required rather than defaulted: an unexplained reset is the one this exists to make visible.
 fn reset(p: &Parsed) -> Result<Mode, String> {
     let repo = target(p)?;
     let reason = p.positional[1..].join(" ");

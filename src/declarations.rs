@@ -3,7 +3,7 @@
 use crate::cli::{Brief, Invocation};
 use crate::git;
 
-// Set while the hook is re-run to enumerate itself: every mode prints its declaration and exits instead of acting, so the list is read from the hook rather than retyped beside it.
+// Set while the hook re-runs to enumerate itself: every mode prints its declaration instead of acting.
 const LIST_ENV: &str = "GIT_AGENT_VERDICT_LIST";
 
 pub struct Declaration {
@@ -13,7 +13,6 @@ pub struct Declaration {
     pub docs: Vec<String>,
     pub rules: Vec<String>,
     pub paths: Vec<String>,
-    // Which model reviews this gate, as the repo asked for it: the intensity a gate is worth is the repo's call, not one this tool makes for it.
     pub model: Option<String>,
     pub brief: Brief,
 }
@@ -22,7 +21,6 @@ pub fn listing_requested() -> bool {
     std::env::var_os(LIST_ENV).is_some()
 }
 
-// Named fields, so a gate that declares no override still lists its docs unambiguously.
 pub fn emit_gate(inv: &Invocation) {
     let mut fields = vec![inv.gate.clone()];
     if inv.brief.simple {
@@ -48,7 +46,7 @@ pub fn emit_gate(inv: &Invocation) {
     println!("{}", fields.join("\t"));
 }
 
-// The listing is one gate per line with tab-separated fields, so a value carrying either would split into a gate this tool cannot read back. Every value goes through it, not only the one that usually carries a newline: a path or a prompt holding a tab is rarer and reads back exactly as wrong.
+// Fields are tab-separated, one gate per line, so any value carrying a tab or newline must be escaped, not just the likely ones.
 fn escaped(text: &str) -> String {
     text.replace('\\', "\\\\")
         .replace('\n', "\\n")
@@ -105,7 +103,6 @@ fn read_gate(gate: &str, fields: std::str::Split<'_, char>) -> Option<Declaratio
             declaration.brief.simple = true;
         }
     }
-    // A line with no measure is not a gate: the hook's own version check and any command it runs beside them print nothing here.
     if declaration.docs.is_empty()
         && declaration.rules.is_empty()
         && declaration.standards.is_empty()
@@ -148,7 +145,7 @@ pub fn read() -> Result<Hook, String> {
         }
         return Err(format!("{} declared no gates; it said: {said}", hook.path));
     }
-    // Every declaration prints its line and exits 0 while enumerating, so anything on stderr is one that refused. Read past it and the gate it refused for is simply absent from the listing — a repo one gate lighter than the hook says, and nothing saying so.
+    // Every declaration exits 0 while enumerating, so anything on stderr means one refused and is silently missing above.
     if !said.is_empty() {
         return Err(format!(
             "{}: a declaration in it was refused, so what it gates by cannot be read:\n{said}",

@@ -7,7 +7,7 @@ use crate::report;
 use crate::runner;
 use crate::trailer::Verdict;
 
-// Nothing is recorded and nothing is committed. A verdict attests one commit, and there is no commit here — what an audit produces is the list of what the rubric now condemns, which the author acts on by making changes that are attested in the usual way.
+// Nothing recorded or committed: an audit just lists what the rubric now condemns, for the author to act on separately.
 fn sweep(
     declaration: &Declaration,
     agent: &crate::agent::Agent,
@@ -36,19 +36,17 @@ fn sweep(
             read_only: declaration.read_only,
         },
     );
-    // Dropped before the answer is judged, and before a failure is carried out: an audit reports a failed gate and keeps going, so a sentence left armed here would name a review that is already over.
+    // Dropped before the answer is judged: an audit keeps going after a failed gate, so a stale sentence would misname it.
     crate::signals::quiet();
     let answer = answered?;
     let verdicts = runner::verdicts(&answer, declaration.brief.simple)?;
     Ok((verdicts, runner::findings(&answer.text)))
 }
 
-// A gate reaching nothing tracked has no repository to review: its pathspec names files this tree does not carry.
 fn reaches(declaration: &Declaration) -> Result<bool, String> {
     Ok(!git::tracked(&declaration.paths)?.is_empty())
 }
 
-// A survey is started the way any round is, and waited on by the caller that asked for it.
 pub fn run(ceiling: std::time::Duration) -> Result<bool, String> {
     let hook = declarations::read()?;
     runner::configured()?;
@@ -60,7 +58,7 @@ pub fn run(ceiling: std::time::Duration) -> Result<bool, String> {
     Ok(true)
 }
 
-// The round process's half: every gate in one pass, stopping for nothing it finds, because a survey is not a procedure the author works through a step at a time. A gate whose reviewer fails does not take the rest with it; what failed is named at the end, and fails the run there.
+// One pass over every gate: a failed reviewer doesn't take the rest of the survey with it — failures are named at the end.
 fn sweep_all(
     hook: &declarations::Hook,
     round: &crate::round::Round,
@@ -93,7 +91,7 @@ fn sweep_all(
         return Err(format!("{} declares no gate matching this tree", hook.path));
     }
     report::audit_done(reviewed, blocked, &failed);
-    // Reported as it happened and refused here: a survey that lost a gate is not a survey, and an exit saying otherwise would be a claim about the gate that never ran.
+    // A survey that lost a gate isn't a survey, even though each failure was already reported above.
     if !failed.is_empty() {
         return Err(format!(
             "no verdict from {}: the audit is incomplete",

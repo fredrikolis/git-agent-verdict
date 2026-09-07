@@ -6,7 +6,7 @@ use crate::trailer::{ADVISORY_SHAPE, COUNTS_SHAPE};
 
 const TEMPLATE: &str = include_str!("prompt.md");
 
-// Shipped in the binary rather than fetched: a rubric that arrives over the network can change between two runs of the same commit, and then a trailer attests a measure nobody can reconstruct. Carried here, they are pinned by whatever pins the tool — the hook's own --require-version line — so they move when a maintainer moves them and never on their own. The list itself is generated at build time from standards/*.md, so the folder is the only place a standard is declared; see build.rs.
+// Shipped in the binary, not fetched, so a trailer always attests a reconstructable rubric. Generated at build time from standards/*.md (see build.rs).
 include!(concat!(env!("OUT_DIR"), "/standards.rs"));
 
 pub fn shipped(name: &str) -> Option<&'static str> {
@@ -16,7 +16,7 @@ pub fn shipped(name: &str) -> Option<&'static str> {
         .map(|(_, text)| *text)
 }
 
-// What each one is for, taken from its own first line rather than restated here: a second description is one that goes stale, and the annotation is already the file's statement of its concern.
+// Taken from each file's own first line rather than restated here, so the description can't go stale.
 pub fn shipped_listing() -> String {
     SHIPPED
         .iter()
@@ -42,7 +42,7 @@ pub fn shipped_names() -> String {
         .join(", ")
 }
 
-// The whole of what --simple changes: an advisory gate has no MAJOR rung, so the rung is absent rather than shown and annotated away. The tool reports its zero, and the trailer keeps one shape everywhere.
+// The whole of what --simple changes: an advisory gate has no MAJOR rung, so it's absent, not shown-and-zeroed.
 const SEVERITY: &str = "MAJOR — blocks the commit, and is reviewed again.
   The work is wrong, or has a severe flaw. An incremental fix will not reach the right answer.
 
@@ -66,7 +66,6 @@ MINOR — optional: fix it, or leave it. Recorded either way.
 Grade by what is wrong, not by what the fix costs.
 A MINOR rounded up to MODERATE makes work for the author that nobody asked for.";
 
-// Its own question, answered once per commit by a runner of its own: the check is on one line of text, not on the code, and it costs a reviewer nothing to have never been asked it.
 const JUDGE: &str =
     "You judge one line of text. Do not review any code, and do not read the repository.
 
@@ -85,7 +84,6 @@ or, naming which of the four it does and quoting the words that do it:
   {{marker}} refused — <which one, and the words>
 ";
 
-// Standing instructions and the line to judge, split as a review's are: the same runner answers both, so the same two halves reach it either way.
 pub fn judge_system() -> String {
     JUDGE.replace("{{marker}}", MARKER)
 }
@@ -94,12 +92,12 @@ pub fn judge_prompt(intent: &str) -> String {
     format!("<diff-intent>{intent}</diff-intent>\n")
 }
 
-// Only a built-in template carries an annotation line; an override is a repo's own file, and eating its first line would be a silent edit.
+// Only a built-in template carries an annotation line; eating an override's first line would be a silent edit.
 fn built_in(text: &str) -> String {
     text.lines().skip(1).collect::<Vec<_>>().join("\n")
 }
 
-// The counts alone. Who reviewed and on what session are read from the agent, not asked of the model: it would be guessing at one and cannot know the other.
+// Counts only: who reviewed and on what session are read from the agent, never asked of the model.
 fn asked_of(simple: bool) -> &'static str {
     if simple {
         ADVISORY_SHAPE
@@ -108,7 +106,7 @@ fn asked_of(simple: bool) -> &'static str {
     }
 }
 
-// What a round is asked to look at. A commit's diff is the whole of normal development; the tree as it stands is what a rubric that just changed has never been read against, and no diff will ever show it.
+// Whole exists because a rubric that just changed has never been read against the tree, and no diff will ever show that.
 #[derive(Clone, Copy)]
 pub enum Reach {
     Diff,
@@ -123,7 +121,6 @@ impl Reach {
         }
     }
 
-    // What the reviewer is judging, named where the task step points at it.
     fn subject(self) -> &'static str {
         match self {
             Reach::Diff => "that diff",
@@ -131,7 +128,6 @@ impl Reach {
         }
     }
 
-    // How far past what it was handed the reviewer must look. A tree has no edited lines to stop at, and a reviewer told to look past them anyway goes hunting for a change nobody made.
     fn rule(self) -> &'static str {
         match self {
             Reach::Diff => "Judge the diff and what it affects, not only the edited lines. Only the staged change is under review, and the working tree may hold edits that are not part of it.",
@@ -140,11 +136,10 @@ impl Reach {
     }
 }
 
-// A reviewer that may write is told where it may write; one that may not is told so plainly, because the harness will refuse the call and a reviewer that does not know why spends its round arguing with the refusal.
+// A reviewer told plainly it can't write: otherwise it spends its round arguing with the harness's silent refusals.
 const SANDBOX: &str = "Do not change the working tree. To test something, copy the repo to a temp directory and change it there. Confirm with `git diff --stat` before you answer.";
 const NO_SANDBOX: &str = "This session cannot write anywhere, and every attempt will be refused. Confirm a suspicion by reading. One you cannot confirm that way is a guess: leave it out.";
 
-// Quoted for the shell the reviewer types it into: a pathspec is written to be globbed by git, not by that shell.
 fn quoted(paths: &[String]) -> String {
     let quoted: Vec<String> = paths
         .iter()
@@ -153,15 +148,13 @@ fn quoted(paths: &[String]) -> String {
     quoted.join(" ")
 }
 
-// Named here as well as at the flag: a hook is read back through the listing, so a name this build does not carry can reach a brief without ever passing the parser.
 pub fn unknown_standard(name: &str) -> String {
     format!("--standard {name}: this build ships {}", shipped_names())
 }
 
-// Read in, not pointed at: a path is something a reviewer may skim or skip, and re-reads every round. Content sits apart from process so neither reads as a footnote to the other.
+// Content is read in, not pointed at by path — a path is something a reviewer may skim or skip.
 fn criteria(declaration: &Declaration) -> Result<String, String> {
     let mut out = String::new();
-    // The general measure before the repo's own: a standard shipped here is what every repo using this tool is judged by, and the repo's documents narrow it.
     for name in &declaration.standards {
         let text = shipped(name).ok_or_else(|| unknown_standard(name))?;
         out.push_str(&format!(
@@ -186,7 +179,6 @@ fn criteria(declaration: &Declaration) -> Result<String, String> {
     Ok(out)
 }
 
-// Everything that does not change between rounds, or between commits: a runner that hands this to a system prompt pays for it once and reads it from cache after.
 pub fn system(declaration: &Declaration, reach: Reach) -> Result<String, String> {
     let template = match &declaration.brief.prompt {
         Some(path) => {
@@ -218,14 +210,12 @@ pub fn system(declaration: &Declaration, reach: Reach) -> Result<String, String>
         .replace("{{shape}}", asked_of(declaration.brief.simple)))
 }
 
-// The one line a round adds. Everything else is standing instruction, so this is all that changes between rounds — and all a resumed reviewer has not already been told.
 pub fn opening(intent: &str) -> String {
     format!(
         "<diff-intent>{intent}</diff-intent>\n\nExecute the review per the instructions above.\n"
     )
 }
 
-// No aim, because there is no change to state one for: a tree is reviewed against the rubric as it now reads, and an intent here would be a sentence about a commit nobody is writing.
 pub fn sweeping() -> String {
     "A standard this gate judges by has changed. Review the repository as it now stands against it.\n\
      There is no commit and no diff. Report what the standard requires, and close with your verdict line.\n"
@@ -236,7 +226,7 @@ pub fn continuing() -> String {
     "Fixes incorporated, re-review requested.\n".to_string()
 }
 
-// Not a re-review: nothing was fixed and nothing was asked again. The round this reviewer was in the middle of was cut short — killed, timed out, or crashed — and it is being taken up where it stopped. Told it was a re-review instead, it would report on changes nobody made.
+// Not a re-review: this round was cut short and is being taken up where it stopped, not asked to judge changes nobody made.
 pub fn resuming() -> String {
     "Your review was interrupted before you reported it. Nothing has changed since.\n\
      Continue from where you stopped, redoing only what you had not finished, and close with your verdict line.\n"
