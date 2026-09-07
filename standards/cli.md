@@ -3,7 +3,7 @@
 
 Design CLI tools that machines can reliably invoke. Predictable. Parseable. Safe.
 
-## Auto-Reject (-∞)
+## AUTO-REJECT (-∞)
 
 - Interactive prompts (blocks agent execution) — use `--confirm`/`--yes`
 - Secrets as CLI args (visible in `ps`, shell history) — env vars only

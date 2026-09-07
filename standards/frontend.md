@@ -9,7 +9,7 @@
 
 **DIP (Dependency Inversion)**: lower tiers never import higher tiers; depend on abstractions. Import DAG: `apps/ → features/ → components/ → ui/`, all converging on `shared/ → types/`. No upward or cross-feature arrows. Enforced via slots, typed injection keys, module return-type contracts, props/events — not a DI container.
 
-## Auto-Reject (-∞)
+## AUTO-REJECT (-∞)
 
 General: fire-and-forget async · global state without justification · missing lifecycle cleanup (teardown for subscriptions/timers/resources) · component file missing its first-line annotation · prop drilling >2 levels · circular imports · type-escape hatch without a justification comment.
 

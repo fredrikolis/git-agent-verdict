@@ -1,7 +1,7 @@
 <!-- Concern: states the universal code-design principles every language-specific standard specializes | Non-concern: per-language idiom and syntax | IO: none -->
 # Language-Agnostic Programming Standards
 
-## Auto-Reject (-∞)
+## AUTO-REJECT (-∞)
 
 Circular imports · failing tests at commit time · hardcoded secrets (use env vars) · force push to main/master. Declare per-language standards as additional `--doc`s.
 
