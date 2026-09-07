@@ -21,8 +21,6 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      # The end-to-end tests build throwaway repos, so git must have an identity
-      # and a deterministic default branch on a bare runner.
       - name: Configure git for the e2e temp repos
         run: |
           git config --global user.email ci@example.com
@@ -30,14 +28,12 @@ jobs:
           git config --global init.defaultBranch main
       - name: Format
         run: cargo fmt --check
-      # --locked here too: a tag whose Cargo.lock disagrees with its Cargo.toml
-      # builds fine and only fails at `cargo publish`, after the tag is public.
+      # --locked: a lockfile mismatch builds fine but fails `cargo publish` after tagging.
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Test
         run: cargo test --all --locked
 
-  # The same two linters .githooks/pre-commit runs, at the same pinned versions.
   gates:
     runs-on: ubuntu-latest
     env:
@@ -55,8 +51,7 @@ jobs:
           cargo install --locked "comment-crusher@${COMMENT_CRUSHER_VERSION}"
           comment-crusher .
 
-  # Freeze the git-subcommand contract: the binary must be reachable as
-  # `git agent-verdict`, which is how every hook in the README invokes it.
+  # Contract: README hooks invoke this binary as `git agent-verdict`.
   git-subcommand:
     runs-on: ubuntu-latest
     steps:
