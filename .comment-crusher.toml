@@ -1,0 +1,8 @@
+# Concern: the comment budget this repo holds itself to | Non-concern: what makes a comment worth keeping | IO: none
+[rules.comment-ratio]
+min_chars = 1000
+
+[[allow]]
+paths = ["README.md", "**/README.md"]
+reason = "dev-agent essentials only, no other audience"
+set = ["doc-length.max_lines=150"]
