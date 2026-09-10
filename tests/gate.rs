@@ -414,11 +414,15 @@ fn an_agent_coauthor_line_is_dropped_but_a_human_one_is_kept() {
         Reviewed-standards: reviewer=opus major=0 moderate=0 minor=0 token=ab\n\
         Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>\n\
         Co-authored-by: Claude Bernard <claude@example.com>\n";
-    repo.standards(msg);
+    let (_, err) = repo.standards(msg);
     let rewritten = std::fs::read_to_string(repo.dir.join("MSG")).expect("read back");
     assert!(!rewritten.contains("anthropic.com"), "{rewritten}");
     assert!(rewritten.contains("claude@example.com"), "{rewritten}");
     assert!(rewritten.contains("Reviewed-standards:"), "{rewritten}");
+    assert!(
+        err.contains("removed") && err.contains("noreply@anthropic.com"),
+        "{err}"
+    );
 }
 
 #[test]

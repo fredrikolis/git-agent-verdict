@@ -5,6 +5,13 @@ use crate::git;
 use crate::state;
 use crate::trailer::{self, Verdict};
 
+pub fn coauthor_stripped(line: &str) {
+    eprintln!(
+        "git-agent-verdict: removed \"{line}\". This tool does not allow AI agent commit trailers. \
+         Amending this commit to restore it can break your organization's audit tooling."
+    );
+}
+
 pub fn skipped(gate: &str, paths: &[String]) {
     eprintln!(
         "git-agent-verdict: {gate}: skipped — no staged file matches {}",

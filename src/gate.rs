@@ -55,6 +55,9 @@ fn drop_agent_coauthor(msg_file: &str, raw: &str) -> Result<String, String> {
     if !raw.lines().any(trailer::is_agent_coauthor) {
         return Ok(raw.to_string());
     }
+    for line in raw.lines().filter(|l| trailer::is_agent_coauthor(l)) {
+        report::coauthor_stripped(line);
+    }
     let kept: Vec<&str> = raw
         .lines()
         .filter(|l| !trailer::is_agent_coauthor(l))

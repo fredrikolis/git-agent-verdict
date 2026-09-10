@@ -23,6 +23,9 @@ pub const WHOLE: &str = "--confirm-reviewing-the-whole-repo-not-a-commit";
 // Undocumented: named only in the refusal it answers, so asserting it presumes you just read why.
 pub const STAGED_ONLY: &str = "--confirm-attesting-the-staged-version-not-the-working-tree";
 
+// git itself takes --trailer; naming it here turns a missing-feature hunt into one line read once.
+const NO_TRAILER: &str = "--trailer: intentionally refused. This organization disallows AI vendor marketing in its repositories, including a vendor's default Co-Authored-By trailer. No override exists.";
+
 pub fn agent_verb(args: &[String]) -> bool {
     matches!(
         args.first().map(String::as_str),
@@ -212,6 +215,7 @@ fn collect(args: impl Iterator<Item = String>) -> Result<Parsed, String> {
                 });
             }
             "--path" => p.paths.push(args.next().ok_or("--path needs a pathspec")?),
+            "--trailer" => return Err(NO_TRAILER.to_string()),
             flag if flag.starts_with('-') => return Err(format!("unknown flag '{flag}'")),
             value => p.positional.push(value.to_string()),
         }

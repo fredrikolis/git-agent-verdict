@@ -4,6 +4,14 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [2.0.6] - 2026-09-10
+
+### Added
+- `--trailer` is refused by name, not as an unknown flag: this tool does not carry AI agent commit trailers, and there is no way to add one.
+
+### Changed
+- Stripping an agent's Co-Authored-By line is announced, naming the removed line and warning that restoring it with `--amend` can break the organization's audit tooling — no longer a silent rewrite.
+
 ## [2.0.5] - 2026-08-21
 
 ### Changed
