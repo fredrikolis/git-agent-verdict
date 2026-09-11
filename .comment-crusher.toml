@@ -11,3 +11,8 @@ set = ["doc-length.max_lines=150"]
 paths = ["CHANGELOG.md"]
 reason = "append-only release log; history is not comment bloat to prune"
 set = ["doc-length.max_lines=2000"]
+
+[[allow]]
+paths = ["standards/ai-design-violations.md"]
+reason = "one numbered violation per line, cited by id; the count is the content"
+set = ["doc-length.max_lines=250"]

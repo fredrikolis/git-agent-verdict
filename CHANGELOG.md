@@ -4,6 +4,11 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [2.1.0] - 2026-09-11
+
+### Added
+- `--standard ai-design-violations` ships a numbered list of the visual defaults that mark a UI, slide, diagram, chart or layout as unexamined AI output, for a reviewer to cite by id.
+
 ## [2.0.6] - 2026-09-10
 
 ### Added
