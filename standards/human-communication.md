@@ -4,7 +4,7 @@
 The rules for reviewing changes to a document a person reads — a README, a guide, an error message —
 scored one changed line at a time.
 
-The first seven are voice, a judgment call per line. The last three are checkable, not matters of
+The first nine are voice, a judgment call per line. The last three are checkable, not matters of
 taste: verify them against the code.
 
 | Rule | Flag a changed line when it... |
@@ -14,6 +14,8 @@ taste: verify them against the code.
 | **Scannable** | opens a paragraph that should be a bulleted list, states a key claim with nothing bolded, or leads with context instead of the point. |
 | **Reader-first** | leads with what we built or how hard it was instead of a pain the reader has hit, or states a benefit before the problem is felt. Name the problem, then the fix, then the benefit. "What's in it for me" beats "what we did". |
 | **Tight** | carries a windup, throat-clearing, or a sentence that explains our reasoning to ourselves rather than moving the reader. Every word earns its place. |
+| **Say the noun** | stands a pronoun-and-relative-clause where a concrete noun belongs: "what it names", "whatever you ask for", "only what it needs", "everything it touches", "the ones that matter", "where it lives", "the thing it does". Name the object: "deletes the cache directory", not "removes whatever it created". |
+| **No coy mechanics** | narrates a mechanism through a personified verb or a flourish where the technical verb exists: reaches, touches, sees, knows about, cares about, remembers, quietly, gracefully, on its own, for free, "and nothing else", "no more, no less", "that's it", "the rest follows". Say what runs: reads, resolves, recurses, writes. |
 | **No em-dashes** | contains an em-dash. Use commas, periods, colons, or parentheses. |
 | **Plain, not hyped** | reaches for hype (superlatives, "blazingly", "seamless", "simply", "just") or stacks hedges ("we believe it might possibly"). Confident and direct. |
 | **Claims match the code** | teaches a flag, command, config key, default, or behavior the shipped tool does not have or that behaves differently now. |

@@ -4,6 +4,12 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [2.2.0] - 2026-09-13
+
+### Added
+- `--standard human-communication` flags a pronoun-and-relative-clause standing in for a noun ("what it names", "whatever you ask for") and a mechanism narrated through personified verbs or flourishes ("reaches", "quietly", "for free", "and nothing else").
+- `--standard agent-communication` demands the path, flag, count or error text over "the relevant files", and bans self-narration ("I'll", "note that", "successfully").
+
 ## [2.1.0] - 2026-09-11
 
 ### Added
