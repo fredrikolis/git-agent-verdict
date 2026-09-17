@@ -230,9 +230,26 @@ pub fn resuming(gate: &str, session: &str, quiet_for: Option<u64>) {
     }
 }
 
-pub fn auditing(hook: &str) {
-    eprintln!("git-agent-verdict: auditing the tree against every gate {hook} declares");
+pub fn auditing(hook: &str, within: &[String]) {
+    let reviewed = if within.is_empty() {
+        "the tree".to_string()
+    } else {
+        within.join(", ")
+    };
+    eprintln!("git-agent-verdict: auditing {reviewed} against every gate {hook} declares");
     eprintln!("  one review per gate. Nothing recorded, nothing committed.");
+}
+
+pub fn unreached(gate: &str, paths: &[String], within: &[String]) {
+    let narrowed = if within.is_empty() {
+        String::new()
+    } else {
+        format!(" under --path {}", within.join(", "))
+    };
+    eprintln!(
+        "git-agent-verdict: {gate}: skipped — no tracked file{narrowed} matches {}",
+        paths.join(", ")
+    );
 }
 
 pub fn audited(at: &std::path::Path, gate: &str, verdicts: &[Verdict], findings: &str) {

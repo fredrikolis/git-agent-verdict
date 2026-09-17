@@ -132,7 +132,10 @@ fn main() -> ExitCode {
             "attest",
             enter(repo).and_then(|()| attest::run(intent.as_deref(), *ceiling, *staged_only)),
         ),
-        Mode::Audit(repo, ceiling) => ("audit", enter(repo).and_then(|()| audit::run(*ceiling))),
+        Mode::Audit(repo, ceiling, within) => (
+            "audit",
+            enter(repo).and_then(|()| audit::run(*ceiling, within)),
+        ),
         Mode::Await(repo) => ("await", enter(repo).and_then(|()| round::wait())),
         Mode::Abort(repo) => ("abort", enter(repo).and_then(|()| attest::abandon())),
         Mode::Commit(repo) => ("commit", enter(repo).and_then(|()| attest::commit())),

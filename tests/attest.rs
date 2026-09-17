@@ -511,6 +511,76 @@ fn a_major_found_by_audit_is_reported_in_the_exit_status() {
 }
 
 #[test]
+fn a_pathspec_narrows_an_audit_to_the_files_it_and_the_gate_share() {
+    let repo = Repo::new();
+    for dir in ["sub", "other"] {
+        std::fs::create_dir_all(repo.dir.join(dir)).expect("dir");
+    }
+    repo.write("sub/inner.rs", "code");
+    repo.write("sub/notes.md", "prose");
+    // A newline in a name: the one byte a line-per-file list cannot carry unquoted.
+    repo.write("other/we\nird.rs", "code");
+    // Runs the scope command the brief hands over, as a reviewer would: a list the brief misquotes lists something else.
+    let follows_the_brief = concat!(
+        r#"sed -n 's/^1\. Run: //p' "$AGENT_VERDICT_SYSTEM" | sh > listed; "#,
+        r#"echo "VERDICT: reviewer=fake session=s-1 major=0 moderate=0 minor=0""#
+    );
+    repo.declare_runner(
+        follows_the_brief,
+        &[r#""$1" rust --doc rubric.md --path '*.rs'"#],
+    );
+    repo.stage(&["src.rs", "sub", "other"]);
+    let run = repo.audit_within(&["sub", "other"]);
+    assert_eq!(run.code, 0, "{}", run.err);
+    // Neither src.rs, which the gate reaches outside both paths, nor notes.md, which sub holds outside the gate.
+    assert_eq!(repo.read("listed"), "\"other/we\\nird.rs\"\nsub/inner.rs\n");
+}
+
+#[test]
+fn a_gate_reaching_nothing_under_the_audited_path_is_not_reviewed() {
+    let repo = Repo::new();
+    std::fs::create_dir_all(repo.dir.join("docs")).expect("docs dir");
+    repo.write("docs/notes.md", "prose");
+    let second = r#""$1" prose --doc rubric.md --path '*.md'"#;
+    repo.declare(
+        CLEAN,
+        &[r#""$1" rust --doc rubric.md --path '*.rs'"#, second],
+    );
+    repo.stage(&["src.rs", "docs"]);
+    let run = repo.audit_within(&["docs"]);
+    assert_eq!(run.code, 0, "{}", run.err);
+    assert!(run.err.contains("rust: skipped"), "{}", run.err);
+    assert!(run.err.contains("under --path docs"), "{}", run.err);
+    assert!(run.out.contains("prose: major=0"), "{}", run.out);
+}
+
+#[test]
+fn an_audited_path_matching_no_tracked_file_is_refused_before_any_review() {
+    let repo = Repo::new();
+    repo.declare(CLEAN, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    let run = repo.audit_within(&["no-such-dir"]);
+    assert_eq!(run.code, 2, "{}", run.err);
+    assert!(
+        run.err
+            .contains("--path no-such-dir: no tracked file matches"),
+        "{}",
+        run.err
+    );
+    assert!(repo.last_round().is_none(), "a round started anyway");
+}
+
+#[test]
+fn an_audited_path_no_gate_reaches_is_an_error_not_a_clean_audit() {
+    let repo = Repo::new();
+    repo.declare(CLEAN, &[r#""$1" rust --doc rubric.md --path '*.rs'"#]);
+    repo.stage(&["src.rs", "rubric.md"]);
+    let run = repo.audit_within(&["rubric.md"]);
+    assert_eq!(run.code, 2, "{}", run.err);
+    assert!(run.err.contains("under --path rubric.md"), "{}", run.err);
+}
+
+#[test]
 fn audit_without_the_whole_repo_confirmation_says_what_it_would_have_done() {
     let repo = Repo::new();
     repo.declare(CLEAN, &[STANDARDS]);

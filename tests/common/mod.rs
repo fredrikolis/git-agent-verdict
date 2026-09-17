@@ -237,6 +237,15 @@ impl Repo {
         self.round(&["audit", "--repo", &root, WHOLE])
     }
 
+    pub fn audit_within(&self, paths: &[&str]) -> Run {
+        let root = self.root();
+        let mut args = vec!["audit", "--repo", &root, WHOLE];
+        for path in paths {
+            args.extend_from_slice(&["--path", path]);
+        }
+        self.round(&args)
+    }
+
     pub fn again(&self) -> Run {
         let root = self.root();
         self.round(&["attest", "--repo", &root])

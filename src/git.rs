@@ -41,10 +41,14 @@ pub fn unstaged(paths: &[String]) -> Result<Vec<String>, String> {
     Ok(nul_separated(&run(&args)?))
 }
 
-// What `audit` reviews, where `staged` is what `attest` reviews.
+// Git's quoted names, not `run`'s raw ones: a newline or non-UTF-8 byte stays exact.
 pub fn tracked(paths: &[String]) -> Result<Vec<String>, String> {
-    let args = with_pathspec(&["ls-files", "-z"], paths);
-    Ok(nul_separated(&run(&args)?))
+    let args = with_pathspec(&["-c", "core.quotePath=true", "ls-files"], paths);
+    let out = run(&args)?;
+    Ok(String::from_utf8_lossy(&out)
+        .lines()
+        .map(str::to_string)
+        .collect())
 }
 
 // A literal matching nothing is a typo; a glob is allowed to match nothing.

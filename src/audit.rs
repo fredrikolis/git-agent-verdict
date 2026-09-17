@@ -1,6 +1,7 @@
-// Concern: starting a survey of the repository as it stands, and what one sweep reviews | Non-concern: what a commit carries | IO: (hook) -> review
+// Concern: starting a survey of the repository as it stands, and what one sweep reviews | Non-concern: what a commit carries | IO: (hook, pathspec) -> review
 
 use crate::agent::Session;
+use crate::brief::Reach;
 use crate::declarations::{self, Declaration};
 use crate::git;
 use crate::report;
@@ -12,8 +13,9 @@ fn sweep(
     declaration: &Declaration,
     agent: &crate::agent::Agent,
     ceiling: std::time::Duration,
+    reach: Reach<'_>,
 ) -> Result<(Vec<Verdict>, String), String> {
-    let system = crate::brief::system(declaration, crate::brief::Reach::Whole)?;
+    let system = crate::brief::system(declaration, reach)?;
     let session = Session::opened();
     report::reviewing(
         &declaration.gate,
@@ -43,16 +45,20 @@ fn sweep(
     Ok((verdicts, runner::findings(&answer.text)))
 }
 
-fn reaches(declaration: &Declaration) -> Result<bool, String> {
-    Ok(!git::tracked(&declaration.paths)?.is_empty())
-}
-
-pub fn run(ceiling: std::time::Duration) -> Result<bool, String> {
+pub fn run(ceiling: std::time::Duration, within: &[String]) -> Result<bool, String> {
     let hook = declarations::read()?;
     runner::configured()?;
+    let unmatched = git::unmatched_literals(within)?;
+    if !unmatched.is_empty() {
+        return Err(format!(
+            "--path {}: no tracked file matches. A --path is a pathspec relative to the repo root.",
+            unmatched.join(", ")
+        ));
+    }
     let held = crate::lock::take()?;
+    let within = within.to_vec();
     let started = crate::round::spawn(held, "audit", ceiling, move |round| {
-        sweep_all(&hook, round, ceiling)
+        sweep_all(&hook, round, ceiling, &within)
     })?;
     report::started(&started);
     Ok(true)
@@ -63,19 +69,35 @@ fn sweep_all(
     hook: &declarations::Hook,
     round: &crate::round::Round,
     ceiling: std::time::Duration,
+    within: &[String],
 ) -> Result<crate::round::Outcome, String> {
     let agent = runner::configured()?;
-    report::auditing(&hook.path);
+    report::auditing(&hook.path, within);
+    // Intersected here because git cannot: a pathspec list is a union, and `within` must never widen a gate.
+    let inside: Option<std::collections::HashSet<String>> = if within.is_empty() {
+        None
+    } else {
+        Some(git::tracked(within)?.into_iter().collect())
+    };
     let mut blocked = false;
     let mut reviewed = 0;
     let mut failed: Vec<String> = Vec::new();
     for declaration in &hook.gates {
         round.at_gate(&declaration.gate);
-        if !reaches(declaration)? {
-            report::skipped(&declaration.gate, &declaration.paths);
+        let mut files = git::tracked(&declaration.paths)?;
+        if let Some(inside) = &inside {
+            files.retain(|file| inside.contains(file));
+        }
+        if files.is_empty() {
+            report::unreached(&declaration.gate, &declaration.paths, within);
             continue;
         }
-        match sweep(declaration, &agent, ceiling) {
+        let reach = if inside.is_some() {
+            Reach::Listed(&files)
+        } else {
+            Reach::Whole
+        };
+        match sweep(declaration, &agent, ceiling, reach) {
             Ok((verdicts, findings)) => {
                 blocked |= verdicts.iter().any(Verdict::blocks);
                 reviewed += 1;
@@ -88,7 +110,15 @@ fn sweep_all(
         }
     }
     if reviewed == 0 && failed.is_empty() {
-        return Err(format!("{} declares no gate matching this tree", hook.path));
+        return Err(if within.is_empty() {
+            format!("{} declares no gate matching this tree", hook.path)
+        } else {
+            format!(
+                "{} declares no gate matching a tracked file under --path {}",
+                hook.path,
+                within.join(", ")
+            )
+        });
     }
     report::audit_done(reviewed, blocked, &failed);
     // A survey that lost a gate isn't a survey, even though each failure was already reported above.

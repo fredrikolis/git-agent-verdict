@@ -7,7 +7,7 @@ pub const USAGE: &str = concat!(
     "                         --path <pathspec>...\n",
     "       git-agent-verdict attest --repo <abs path> [--intent <one line>]\n",
     "                                [--timeout <minutes, default 30; or 90s, 45m, 2h>]\n",
-    "       git-agent-verdict audit  --repo <abs path> [--timeout <minutes>]\n",
+    "       git-agent-verdict audit  --repo <abs path> [--timeout <minutes>] [--path <pathspec>...]\n",
     "       git-agent-verdict commit --repo <abs path>\n",
     "       git-agent-verdict await  --repo <abs path>\n",
     "       git-agent-verdict abort  --repo <abs path>\n",
@@ -92,7 +92,8 @@ pub enum Mode {
     Await(String),
     Abort(String),
     Commit(String),
-    Audit(String, std::time::Duration),
+    // The pathspecs narrow every gate's own; none given leaves each gate its full reach.
+    Audit(String, std::time::Duration, Vec<String>),
     ReviewerPrompt(String),
     RequireVersion(String),
     RepoSetupGuide,
@@ -305,7 +306,8 @@ fn attest(p: &Parsed) -> Result<Mode, String> {
 const NOT_A_COMMIT: &str = "audit reviews every file each gate reaches, not the staged diff. \
 One full review per gate, and it lands nothing.\n\nUse it after a standard changes, to find what the \
 new criteria reject in code no commit is modifying. Normal development is attested from the diff: that \
-is what `attest` is for, and it is what the hook demands at commit time.\n\nTo confirm:\n\n  git agent-verdict audit --repo <abs path to the repo root> \\\n    \
+is what `attest` is for, and it is what the hook demands at commit time.\n\nTo audit one part of the tree, \
+add --path <pathspec>, repeatable and relative to the repo root: each gate then reviews only the files both it and a --path reach.\n\nTo confirm:\n\n  git agent-verdict audit --repo <abs path to the repo root> \\\n    \
 --confirm-reviewing-the-whole-repo-not-a-commit";
 
 fn audit(p: &Parsed) -> Result<Mode, String> {
@@ -318,11 +320,11 @@ fn audit(p: &Parsed) -> Result<Mode, String> {
         None => REVIEW_CEILING,
     };
     only(
-        "audit takes --repo and --timeout only: what each gate reviews comes from the commit-msg hook, and there is no intent because there is no commit",
+        "audit takes --repo, --timeout and --path only: the criteria each gate judges by come from the commit-msg hook, and there is no intent because there is no commit",
         p,
-        &["--repo", "--timeout", "<positional>", WHOLE],
+        &["--repo", "--timeout", "--path", "<positional>", WHOLE],
     )?;
-    Ok(Mode::Audit(repo, ceiling))
+    Ok(Mode::Audit(repo, ceiling, p.paths.clone()))
 }
 
 fn waiting(p: &Parsed) -> Result<Mode, String> {

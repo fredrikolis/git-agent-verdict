@@ -108,23 +108,25 @@ fn asked_of(simple: bool) -> &'static str {
 
 // Whole exists because a rubric that just changed has never been read against the tree, and no diff will ever show that.
 #[derive(Clone, Copy)]
-pub enum Reach {
+pub enum Reach<'a> {
     Diff,
     Whole,
+    Listed(&'a [String]),
 }
 
-impl Reach {
+impl Reach<'_> {
     fn command(self, paths: &[String]) -> String {
         match self {
             Reach::Diff => format!("git diff --cached -- {}", quoted(paths)),
             Reach::Whole => format!("git ls-files -- {}", quoted(paths)),
+            Reach::Listed(files) => format!("printf '%s\\n' {}", quoted(files)),
         }
     }
 
     fn subject(self) -> &'static str {
         match self {
             Reach::Diff => "that diff",
-            Reach::Whole => "every file it lists",
+            Reach::Whole | Reach::Listed(_) => "every file it lists",
         }
     }
 
@@ -132,6 +134,7 @@ impl Reach {
         match self {
             Reach::Diff => "Judge the diff and what it affects, not only the edited lines. Only the staged change is under review, and the working tree may hold edits that are not part of it.",
             Reach::Whole => "Judge each file as it stands. Nothing here is a change, and there is no diff to read.",
+            Reach::Listed(_) => "Judge each listed file as it stands, and no file the list leaves out. Nothing here is a change, and there is no diff to read.",
         }
     }
 }
@@ -179,7 +182,7 @@ fn criteria(declaration: &Declaration) -> Result<String, String> {
     Ok(out)
 }
 
-pub fn system(declaration: &Declaration, reach: Reach) -> Result<String, String> {
+pub fn system(declaration: &Declaration, reach: Reach<'_>) -> Result<String, String> {
     let template = match &declaration.brief.prompt {
         Some(path) => {
             std::fs::read_to_string(path).map_err(|e| format!("--override-prompt {path}: {e}"))?
@@ -217,7 +220,7 @@ pub fn opening(intent: &str) -> String {
 }
 
 pub fn sweeping() -> String {
-    "A standard this gate judges by has changed. Review the repository as it now stands against it.\n\
+    "A standard this gate judges by has changed. Review the files in scope, as they now stand, against it.\n\
      There is no commit and no diff. Report what the standard requires, and close with your verdict line.\n"
         .to_string()
 }

@@ -4,6 +4,14 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [2.3.0] - 2026-09-17
+
+### Added
+- `audit --path <pathspec>...` narrows the survey: each gate reviews only the tracked files both its own `--path` and the audit's reach, a gate sharing none is skipped, and a literal matching no tracked file is refused before any review starts.
+
+### Fixed
+- An audit's skip line said "no staged file matches"; an audit reads tracked files, and says so.
+
 ## [2.2.0] - 2026-09-13
 
 ### Added
