@@ -59,7 +59,7 @@ Bash(git agent-verdict commit)
 
 ```bash
 cargo install git-agent-verdict
-git config --global agent-verdict.runner claude
+git config --global agent-verdict.runner claude   # or codex
 ```
 
 Installs as `git agent-verdict`.
@@ -95,6 +95,6 @@ repo. `--help` is the flag grammar.
 
 ## Contributing
 
-The reviewer runs on Claude Code today. **Please help us add support for other agents.** The seam is
-`src/runner.rs` and `src/agent.rs`: an agent is an argv, a session, and an answer this tool parses
-verdicts out of. Nothing above that layer knows which one answered.
+The reviewer runs on Claude Code or OpenAI Codex CLI today. **Please help us add support for other
+agents.** The seam is `src/runner.rs` and `src/agent.rs`: an agent is an argv, a session, and an
+answer this tool parses verdicts out of. Nothing above that layer knows which one answered.

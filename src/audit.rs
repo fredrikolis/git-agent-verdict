@@ -20,7 +20,8 @@ fn sweep(
     report::reviewing(
         &declaration.gate,
         session.id(),
-        crate::agent::transcript_path(session.id()).as_deref(),
+        agent.transcript_path(session.id()).as_deref(),
+        agent.latest_activity(),
     );
     crate::signals::say(&format!(
         "while reviewing {}, session {}.",

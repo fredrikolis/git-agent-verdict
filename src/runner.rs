@@ -14,7 +14,8 @@ pub fn configured() -> Result<Agent, String> {
     let named = git::config(RUNNER_KEY).ok_or_else(|| {
         format!(
             "no reviewer configured, and there is no default:\n  \
-             git config --global {RUNNER_KEY} claude"
+             git config --global {RUNNER_KEY} claude\n  \
+             git config --global {RUNNER_KEY} codex"
         )
     })?;
     Agent::named(&named)

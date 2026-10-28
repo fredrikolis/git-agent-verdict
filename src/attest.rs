@@ -29,9 +29,13 @@ struct Round {
     session: crate::agent::Session,
 }
 
-fn round_for(declaration: &Declaration, steps: &[state::Step]) -> Result<Round, String> {
+fn round_for(
+    agent: crate::agent::Agent,
+    declaration: &Declaration,
+    steps: &[state::Step],
+) -> Result<Round, String> {
     if let Some(held) = state::in_flight()? {
-        if held.gate == declaration.gate && crate::agent::transcript(&held.session).is_some() {
+        if held.gate == declaration.gate && agent.transcript(&held.session).is_some() {
             return Ok(Round {
                 opening: Opening::Interrupted,
                 session: crate::agent::Session::resumed(&held.session),
@@ -315,12 +319,12 @@ fn review_one(
 ) -> Result<bool, String> {
     let agent = crate::runner::configured()?;
     round.at_gate(&declaration.gate);
-    let opened = round_for(declaration, steps)?;
+    let opened = round_for(agent, declaration, steps)?;
     if matches!(opened.opening, Opening::Interrupted) {
         report::resuming(
             &declaration.gate,
             opened.session.id(),
-            crate::agent::last_wrote(opened.session.id()),
+            agent.last_wrote(opened.session.id()),
         );
     }
     // Built before the marker: a wiring fault here shouldn't spend an interrupted round's one resume.
@@ -330,7 +334,8 @@ fn review_one(
     report::reviewing(
         &declaration.gate,
         opened.session.id(),
-        crate::agent::transcript_path(opened.session.id()).as_deref(),
+        agent.transcript_path(opened.session.id()).as_deref(),
+        agent.latest_activity(),
     );
     crate::signals::say(&format!(
         "while reviewing {}, session {}.",

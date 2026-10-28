@@ -53,7 +53,7 @@ const GUIDE: &str = r#"CONFIGURING A REPOSITORY — git-agent-verdict
 
      git config core.hooksPath .githooks
 
-3. Per host. No default: unset, attest refuses.
+3. Per host, one of claude (Claude Code) or codex (OpenAI Codex CLI). No default: unset, attest refuses.
 
      git config --global agent-verdict.runner claude
 

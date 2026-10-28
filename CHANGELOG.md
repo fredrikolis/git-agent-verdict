@@ -4,6 +4,11 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [Unreleased]
+
+### Added
+- `git config agent-verdict.runner codex` runs the reviewer on OpenAI Codex CLI (`codex exec`); `--read-only` maps to its read-only sandbox.
+
 ## [2.3.0] - 2026-09-17
 
 ### Added
