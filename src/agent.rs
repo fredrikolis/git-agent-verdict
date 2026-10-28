@@ -657,6 +657,14 @@ fn ran_on(transcript: &str) -> Option<String> {
         .and_then(|record| record["payload"]["model"].as_str().map(str::to_string))
 }
 
+// An API refusal arrives as the provider's JSON error body, quoted whole as the message.
+fn unwrapped(message: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(message)
+        .ok()
+        .and_then(|body| body["error"]["message"].as_str().map(str::to_string))
+        .unwrap_or_else(|| message.to_string())
+}
+
 // The answer is the turn's last agent_message; only turn.completed says the turn ended.
 fn read_codex(said: &Said) -> Result<(String, String), String> {
     let mut text = None;
@@ -675,10 +683,10 @@ fn read_codex(said: &Said) -> Result<(String, String), String> {
                 let reported = event["error"]["message"]
                     .as_str()
                     .unwrap_or("no reason given");
-                ended = Some(Err(reported.to_string()));
+                ended = Some(Err(unwrapped(reported)));
             }
             // Not fatal on its own: codex reports a retried stream this way and carries on.
-            "error" => last_error = event["message"].as_str().map(str::to_string),
+            "error" => last_error = event["message"].as_str().map(unwrapped),
             _ => {}
         }
     }
@@ -794,18 +802,20 @@ mod tests {
         assert_eq!(thread, "0199a213-81c0-7800-8aa1-bbab2a035a53");
     }
 
-    // codex exits 1 on a failed turn, with tracing noise on stderr: the reason is only on stdout.
+    // As codex-cli 0.162.1 reported a bad --model: exit 1, tracing noise on stderr, the API's error body on stdout.
     #[test]
     fn a_failed_codex_turn_is_an_error_naming_its_reason() {
         let out = r#"{"type":"thread.started","thread_id":"0199a213-81c0-7800-8aa1-bbab2a035a53"}
 {"type":"turn.started"}
 {"type":"error","message":"Reconnecting... 1/5"}
-{"type":"turn.failed","error":{"message":"The 'gpt-nope' model does not exist"}}
+{"type":"turn.failed","error":{"message":"{\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\",\"message\":\"The 'gpt-nope' model is not supported when using Codex with a ChatGPT account.\",\"code\":\"model_not_found\"}}"}}
 "#;
         let noise = "2026-10-28T10:00:00Z ERROR codex_api: websocket closed: 401";
         let failed = read_codex(&said(out, 1, noise)).expect_err("a failed turn");
         assert!(
-            failed.contains("The 'gpt-nope' model does not exist"),
+            failed.contains(
+                "reported an error: The 'gpt-nope' model is not supported when using Codex"
+            ),
             "{failed}"
         );
     }
