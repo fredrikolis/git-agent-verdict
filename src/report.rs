@@ -203,9 +203,12 @@ pub fn reviewing(gate: &str, session: &str, transcript: Option<&std::path::Path>
         "git-agent-verdict: {gate}: reviewing — session {session}, pid {}",
         std::process::id()
     );
-    let Some(path) = transcript else {
-        return;
-    };
+    if let Some(path) = transcript {
+        progress_log(path, latest);
+    }
+}
+
+pub fn progress_log(path: &std::path::Path, latest: &str) {
     println!("progress log: {}", path.display());
     println!(
         "  latest activity: {latest} {} | cut -c1-110 | tail -5",

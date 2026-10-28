@@ -62,7 +62,7 @@ impl Repo {
         self.dir.with_extension("home")
     }
 
-    // Mirrors `slug` in src/agent.rs, duplicated since this crate ships no library: an edit to either wants the other.
+    // Mirrors `slug` in src/agent.rs and the sed in declare_runner's stub, duplicated since this crate ships no library: an edit to one wants the others.
     pub fn transcript_for(&self, session: &str) {
         let slug: String = self
             .dir
@@ -292,7 +292,7 @@ impl Repo {
         self.declare_runner(&format!("printf '{verdict}\\n'"), gates);
     }
 
-    // The stub wraps the reviewer's text as the JSON the real `claude` CLI returns.
+    // The stub wraps the reviewer's text as the JSON the real `claude` CLI returns, and leaves a transcript where it would: only a session with one is resumed.
     pub fn declare_runner(&self, body: &str, gates: &[&str]) {
         self.hook(gates);
         let bin = self.dir.join("bin");
@@ -324,6 +324,8 @@ else
   text=$({body})
 fi
 export SID=$(cat session 2>/dev/null || echo s-1) TEXT="$text"
+projects="$HOME/.claude/projects/$(pwd | sed 's/[^A-Za-z0-9]/-/g')"
+mkdir -p "$projects" && echo '{{}}' >> "$projects/$SID.jsonl"
 python3 -c 'import json, os; print(json.dumps({{"is_error": False, "result": os.environ["TEXT"], "session_id": os.environ["SID"], "modelUsage": {{"fake-model": {{}}}}}}))'
 "#
         );

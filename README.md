@@ -80,6 +80,9 @@ git agent-verdict "$1" standards --model opus \
 git agent-verdict "$1" docs --simple --doc docs/house-style.md --path "*.md"
 ```
 
+`--model` names a model of the host's runner: `opus` is a Claude model and fails under codex. Leave it
+out of a hook shared by hosts that run different agents.
+
 `.git/hooks/commit-msg` is the standard location and needs no configuration, but git does not track
 it, so each clone and each agent would install its own. To make the gates a property of the repo,
 commit the hook and point git at it:

@@ -156,6 +156,26 @@ fn a_blocked_gate_reviews_again_and_is_handed_its_session() {
     assert!(message.contains("major=0"), "{message}");
 }
 
+// A session this host's runner holds no transcript for, such as one recorded before the runner was switched, cannot be resumed.
+#[test]
+fn a_recorded_session_with_no_transcript_here_is_reviewed_afresh() {
+    let repo = Repo::new();
+    let escalating = concat!(
+        r#"n=$(cat rounds 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > rounds; "#,
+        r#"echo "[$AGENT_VERDICT_PRIOR_SESSION]" >> handed; m=0; if [ "$n" = 1 ]; then m=1; fi; "#,
+        r#"echo "VERDICT: reviewer=fake session=s-1 major=$m moderate=0 minor=0""#
+    );
+    repo.declare_runner(escalating, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    let blocked = repo.attest(AIM);
+    assert_eq!(blocked.code, 1, "{}", blocked.err);
+    std::fs::remove_dir_all(repo.home().join(".claude")).expect("drop the transcripts");
+    repo.write("src.rs", "reworked");
+    repo.stage(&["src.rs"]);
+    let message = repo.landed_again(3);
+    assert_eq!(repo.read("handed"), "[]\n[]\n", "{message}");
+}
+
 #[test]
 fn a_reviewer_that_resumed_is_briefed_only_on_what_changed() {
     let repo = Repo::new();

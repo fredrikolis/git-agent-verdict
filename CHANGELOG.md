@@ -4,10 +4,13 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
-## [Unreleased]
+## [2.4.0] - 2026-10-28
 
 ### Added
-- `git config agent-verdict.runner codex` runs the reviewer on OpenAI Codex CLI (`codex exec`); `--read-only` maps to its read-only sandbox.
+- `git config agent-verdict.runner codex` runs the reviewer on OpenAI Codex CLI; `--model` names a model of the host's runner.
+
+### Changed
+- A recorded session the configured runner holds no transcript for starts a first round, not a failing resume.
 
 ## [2.3.0] - 2026-09-17
 

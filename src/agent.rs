@@ -76,7 +76,24 @@ impl Agent {
         }
     }
 
-    // Where a review about to start will be logged. Codex names its own session once running, so a fresh one has no path yet.
+    pub fn name(self) -> &'static str {
+        match self {
+            Agent::Claude => "claude",
+            Agent::Codex => "codex",
+        }
+    }
+
+    // Codex keeps the brief its thread started with, so a changed brief needs a fresh thread.
+    pub fn resumable(self, session: &str, system: &str) -> bool {
+        match self {
+            Agent::Claude => self.transcript(session).is_some(),
+            Agent::Codex => codex_transcript(session)
+                .and_then(|path| std::fs::read_to_string(path).ok())
+                .is_some_and(|log| log.contains(escaped(system).as_str())),
+        }
+    }
+
+    // Codex names a fresh session only once running, and announces its log then.
     pub fn transcript_path(self, session: &str) -> Option<std::path::PathBuf> {
         match self {
             Agent::Claude => claude_transcript_path(session),
@@ -126,7 +143,17 @@ impl Agent {
 
     fn stalled_on(self, session: &str) -> Option<String> {
         let text = std::fs::read_to_string(self.transcript(session)?).ok()?;
-        let tail: String = text.lines().rev().take(6).collect::<Vec<_>>().join(" ");
+        // Codex follows each tool call with bookkeeping lines.
+        let window = match self {
+            Agent::Claude => 6,
+            Agent::Codex => 30,
+        };
+        let tail: String = text
+            .lines()
+            .rev()
+            .take(window)
+            .collect::<Vec<_>>()
+            .join(" ");
         self.denials()
             .iter()
             .find(|mark| tail.contains(*mark))
@@ -221,6 +248,7 @@ fn claude(
     )
     .map_err(told)?;
     let _ = std::fs::remove_file(&file);
+    exited(&said).map_err(told)?;
     read_claude(&said).map_err(told)
 }
 
@@ -228,6 +256,18 @@ fn claude(
 struct Said {
     out: String,
     err: String,
+    status: std::process::ExitStatus,
+}
+
+fn exited(said: &Said) -> Result<(), String> {
+    if said.status.success() {
+        return Ok(());
+    }
+    let noise = clipped(&said.err);
+    if noise.is_empty() {
+        return Err(format!("the reviewer exited {}", said.status));
+    }
+    Err(noise)
 }
 
 const HEARTBEAT: Duration = Duration::from_secs(60);
@@ -409,6 +449,7 @@ fn piped(
     let said = Said {
         out: text_of(&out),
         err: text_of(&err),
+        status,
     };
     match writer.join() {
         Err(_) => return Err("the prompt was never written to the reviewer".to_string()),
@@ -416,13 +457,6 @@ fn piped(
             return Err(format!("cannot send the prompt to the reviewer: {e}"));
         }
         Ok(_) => {}
-    }
-    if !status.success() {
-        let noise = clipped(&said.err);
-        if noise.is_empty() {
-            return Err(format!("the reviewer exited {status}"));
-        }
-        return Err(noise);
     }
     Ok(said)
 }
@@ -472,11 +506,11 @@ fn codex(
     session: &Session,
     terms: &Terms,
 ) -> Result<Answer, String> {
-    // A developer message is where claude's --append-system-prompt-file lands; codex has no file form of it. A JSON string is also a TOML one.
-    let instructions = format!("developer_instructions={}", serde_json::Value::from(system));
+    // Codex's only file form, model_instructions_file, replaces its base prompt rather than adding to it.
+    let instructions = format!("developer_instructions=\"{}\"", escaped(system));
     if instructions.len() >= ARGUMENT {
         return Err(format!(
-            "this gate's brief is {} KiB, and codex takes it as one argument, which Linux caps at {} KiB",
+            "this gate's brief is {} KiB, and codex takes it as one argument, which Linux caps at {} KiB.\nSplit its criteria across more gates, or review it under claude, which reads its brief from a file.",
             instructions.len() / 1024,
             ARGUMENT / 1024
         ));
@@ -486,18 +520,18 @@ fn codex(
     if let Some(model) = terms.model {
         command.args(["--model", model]);
     }
-    // No smaller model is named for the judge: codex's lineup moves too fast to pin one, so it asks the default model to reason less.
+    // No smaller judge model is pinned: codex's lineup moves too fast.
     if let Role::JudgeIntent = role {
         command.args(["-c", "model_reasoning_effort=\"low\""]);
     }
-    // exec never asks for approval, so whatever would have prompted is refused already; read-only additionally refuses every write.
+    // exec refuses what would have prompted unless the host's config sets an auto-reviewer; without --read-only, that config picks the sandbox.
     if terms.read_only {
         command.args(["--sandbox", "read-only"]);
     }
     let tap = match session {
         Session::Fresh(handle) => {
             command.arg("-");
-            Some(linking(handle)?)
+            Some(linking(handle, role)?)
         }
         Session::Resume(id) => {
             command.args(["resume", &codex_thread(id), "-"]);
@@ -515,11 +549,15 @@ fn codex(
         tap,
     )
     .map_err(told)?;
-    let (text, thread) = read_codex(&said).map_err(told)?;
-    if let Ok(dir) = threads() {
-        let _ = std::fs::remove_file(dir.join(session.id()));
+    let read = read_codex(&said);
+    // Kept after a fresh session fails, for resuming it; a resume gets one attempt.
+    if read.is_ok() || matches!(session, Session::Resume(_)) {
+        if let Ok(dir) = threads() {
+            let _ = std::fs::remove_file(dir.join(session.id()));
+        }
     }
-    // The model that actually ran: the transcript records it per turn, the event stream never names it.
+    let (text, thread) = read.map_err(told)?;
+    // The event stream never names the model; the transcript does, per turn.
     let reviewer = codex_transcript(&thread)
         .and_then(|path| std::fs::read_to_string(path).ok())
         .and_then(|log| ran_on(&log))
@@ -532,23 +570,33 @@ fn codex(
     })
 }
 
+// Valid in a TOML basic string, and as codex's transcript writes the brief.
+fn escaped(text: &str) -> String {
+    let quoted = serde_json::Value::from(text).to_string();
+    quoted[1..quoted.len() - 1].to_string()
+}
+
 fn threads() -> Result<std::path::PathBuf, String> {
     git::git_path("AGENT_VERDICT_CODEX_THREADS")
 }
 
-// Codex assigns its own session id and announces it first; linking the handle assigned before the spawn to it then lets a round killed mid-review find and resume it.
-fn linking(handle: &str) -> Result<Tap, String> {
+// Codex picks its own session id; linking the handle to it lets a round killed mid-review resume it.
+fn linking(handle: &str, role: Role) -> Result<Tap, String> {
     let dir = threads()?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     let link = dir.join(handle);
+    let sessions = codex_home().map(|home| home.join("sessions"));
     Ok(Box::new(move |seen: &[u8]| {
-        match thread_started(&String::from_utf8_lossy(seen)) {
-            Some(thread) => {
-                let _ = std::fs::write(&link, thread);
-                true
-            }
-            None => false,
+        let Some(thread) = thread_started(&String::from_utf8_lossy(seen)) else {
+            return false;
+        };
+        let _ = std::fs::write(&link, &thread);
+        // The file, and so its day and time, does not exist yet.
+        if let (Role::Review, Some(sessions)) = (role, &sessions) {
+            let log = sessions.join(format!("*/*/*/rollout-*-{thread}.jsonl"));
+            crate::report::progress_log(&log, Agent::Codex.latest_activity());
         }
+        true
     }))
 }
 
@@ -573,15 +621,16 @@ fn codex_home() -> Option<std::path::PathBuf> {
     }
 }
 
-// rollout-<YYYY-MM-DDTHH-MM-SS>-<thread>[_<rollout>].jsonl, as codex-rs/rollout names it.
+// rollout-<YYYY-MM-DDTHH-MM-SS>-<thread>[_<rollout>].jsonl[.zst], as codex-rs/rollout names it; only codex reads a .zst back.
 fn rollout_of(name: &str, thread: &str) -> bool {
     name.strip_prefix("rollout-")
+        .map(|core| core.strip_suffix(".zst").unwrap_or(core))
         .and_then(|core| core.strip_suffix(".jsonl"))
         .and_then(|core| core.get(20..))
         .is_some_and(|ids| ids.split('_').next() == Some(thread))
 }
 
-// Filed under sessions/YYYY/MM/DD by the day it started, which this side does not know, so every day is searched.
+// Filed under sessions/YYYY/MM/DD by a start day this side does not know.
 fn codex_transcript(session: &str) -> Option<std::path::PathBuf> {
     let thread = codex_thread(session);
     let mut found = vec![codex_home()?.join("sessions")];
@@ -608,7 +657,7 @@ fn ran_on(transcript: &str) -> Option<String> {
         .and_then(|record| record["payload"]["model"].as_str().map(str::to_string))
 }
 
-// One event per line: the answer is the turn's last agent_message, and only turn.completed says the turn ran to its end.
+// The answer is the turn's last agent_message; only turn.completed says the turn ended.
 fn read_codex(said: &Said) -> Result<(String, String), String> {
     let mut text = None;
     let mut ended = None;
@@ -633,14 +682,16 @@ fn read_codex(said: &Said) -> Result<(String, String), String> {
             _ => {}
         }
     }
+    // Read before the exit status: codex exits 1 on a failed turn, and only stdout says why.
     match (ended, last_error) {
-        (Some(Ok(())), _) => {}
+        (Some(Ok(())), _) => exited(said)?,
         (Some(Err(reported)), _) => {
             return Err(with_noise(
                 &format!("the reviewer reported an error: {reported}"),
                 &said.err,
             ))
         }
+        (None, _) if !said.status.success() => exited(said)?,
         (None, Some(reported)) => {
             return Err(with_noise(
                 &format!("the reviewer's turn never completed; its last error: {reported}"),
@@ -706,10 +757,12 @@ fn read_claude(said: &Said) -> Result<Answer, String> {
 mod tests {
     use super::{read_codex, rollout_of, slug, Said};
 
-    fn said(out: &str) -> Said {
+    // Raw wait statuses: the exit code sits in the second byte.
+    fn said(out: &str, code: i32, err: &str) -> Said {
         Said {
             out: out.to_string(),
-            err: String::new(),
+            err: err.to_string(),
+            status: std::os::unix::process::ExitStatusExt::from_raw(code << 8),
         }
     }
 
@@ -736,11 +789,12 @@ mod tests {
 {"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"No findings.\nVERDICT: major=0 moderate=0 minor=0"}}
 {"type":"turn.completed","usage":{"input_tokens":24763,"cached_input_tokens":24448,"output_tokens":122,"reasoning_output_tokens":0}}
 "#;
-        let (text, thread) = read_codex(&said(out)).expect("an answer");
+        let (text, thread) = read_codex(&said(out, 0, "")).expect("an answer");
         assert_eq!(text, "No findings.\nVERDICT: major=0 moderate=0 minor=0");
         assert_eq!(thread, "0199a213-81c0-7800-8aa1-bbab2a035a53");
     }
 
+    // codex exits 1 on a failed turn, with tracing noise on stderr: the reason is only on stdout.
     #[test]
     fn a_failed_codex_turn_is_an_error_naming_its_reason() {
         let out = r#"{"type":"thread.started","thread_id":"0199a213-81c0-7800-8aa1-bbab2a035a53"}
@@ -748,7 +802,8 @@ mod tests {
 {"type":"error","message":"Reconnecting... 1/5"}
 {"type":"turn.failed","error":{"message":"The 'gpt-nope' model does not exist"}}
 "#;
-        let failed = read_codex(&said(out)).expect_err("a failed turn");
+        let noise = "2026-10-28T10:00:00Z ERROR codex_api: websocket closed: 401";
+        let failed = read_codex(&said(out, 1, noise)).expect_err("a failed turn");
         assert!(
             failed.contains("The 'gpt-nope' model does not exist"),
             "{failed}"
@@ -764,6 +819,10 @@ mod tests {
         ));
         assert!(rollout_of(
             "rollout-2026-10-12T19-17-46-01a1330d-35ec-7522-9371-755e554c8d2c_01a1330d-35ec-7522-9371-000000000000.jsonl",
+            thread
+        ));
+        assert!(rollout_of(
+            "rollout-2026-10-12T19-17-46-01a1330d-35ec-7522-9371-755e554c8d2c.jsonl.zst",
             thread
         ));
         assert!(!rollout_of(
