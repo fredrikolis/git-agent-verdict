@@ -59,7 +59,7 @@ Bash(git agent-verdict commit)
 
 ```bash
 cargo install git-agent-verdict
-git config --global agent-verdict.runner claude
+git config --global agent-verdict.runner claude   # or codex
 ```
 
 Installs as `git agent-verdict`.
@@ -80,6 +80,9 @@ git agent-verdict "$1" standards --model opus \
 git agent-verdict "$1" docs --simple --doc docs/house-style.md --path "*.md"
 ```
 
+`--model` names a model of the host's runner: `opus` is a Claude model and fails under codex. Leave it
+out of a hook shared by hosts that run different agents.
+
 `.git/hooks/commit-msg` is the standard location and needs no configuration, but git does not track
 it, so each clone and each agent would install its own. To make the gates a property of the repo,
 commit the hook and point git at it:
@@ -95,6 +98,6 @@ repo. `--help` is the flag grammar.
 
 ## Contributing
 
-The reviewer runs on Claude Code today. **Please help us add support for other agents.** The seam is
-`src/runner.rs` and `src/agent.rs`: an agent is an argv, a session, and an answer this tool parses
-verdicts out of. Nothing above that layer knows which one answered.
+The reviewer runs on Claude Code or OpenAI Codex CLI today. **Please help us add support for other
+agents.** The seam is `src/runner.rs` and `src/agent.rs`: an agent is an argv, a session, and an
+answer this tool parses verdicts out of. Nothing above that layer knows which one answered.

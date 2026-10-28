@@ -124,6 +124,104 @@ fn a_round_cut_short_is_resumed_where_it_stopped() {
     );
 }
 
+// Codex names its own thread, so the round reaches it only through the link the tool keeps.
+#[test]
+fn a_codex_round_cut_short_is_resumed_through_its_link() {
+    let repo = Repo::new();
+    let hangs_once = concat!(
+        r#"n=$(cat rounds 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > rounds; "#,
+        r#"cat >> prompts; echo "[$AGENT_VERDICT_PRIOR_SESSION]" >> handed; "#,
+        r#"if [ "$n" = 1 ]; then sleep 60; fi; "#,
+        r#"echo "VERDICT: major=0 moderate=0 minor=0""#
+    );
+    repo.declare_codex(hangs_once, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    let killed = repo.attest_within(AIM, "2s");
+    assert_eq!(killed.code, 2, "{}", killed.err);
+    let links = repo.codex_links();
+    assert_eq!(links.len(), 1, "{links:?}");
+    let (handle, thread) = &links[0];
+    assert!(killed.err.contains(thread.as_str()), "{}", killed.err);
+
+    let resumed = repo.again();
+    assert_eq!(resumed.code, 0, "{}", resumed.err);
+    assert!(
+        resumed.err.contains(&format!("resuming session {handle}")),
+        "{}",
+        resumed.err
+    );
+    assert_eq!(repo.read("handed"), format!("[]\n[{thread}]\n"));
+    assert!(repo.prompts().contains("interrupted"), "{}", repo.prompts());
+    assert_eq!(repo.codex_links(), Vec::new());
+}
+
+#[test]
+fn a_codex_resume_that_fails_names_its_transcript_and_drops_its_link() {
+    let repo = Repo::new();
+    let hangs_then_fails = concat!(
+        r#"n=$(cat rounds 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > rounds; "#,
+        r#"if [ "$n" = 1 ]; then sleep 60; fi; "#,
+        r#"echo "the model went away"; exit 1"#
+    );
+    repo.declare_codex(hangs_then_fails, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    assert_eq!(repo.attest_within(AIM, "2s").code, 2);
+    let (_, thread) = repo.codex_links().pop().expect("a link");
+
+    let failed = repo.again();
+    assert_eq!(failed.code, 2, "{}", failed.err);
+    assert!(failed.err.contains("the model went away"), "{}", failed.err);
+    assert!(
+        failed.err.contains(&format!("{thread}.jsonl")),
+        "the failed resume did not name its transcript: {}",
+        failed.err
+    );
+    assert_eq!(repo.codex_links(), Vec::new());
+}
+
+// Codex keeps the brief its thread started with, so a changed brief cannot be resumed into it.
+#[test]
+fn a_codex_gate_resumes_its_thread_only_while_its_brief_is_unchanged() {
+    let repo = Repo::new();
+    let escalating = concat!(
+        r#"n=$(cat rounds 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > rounds; "#,
+        r#"echo "[$AGENT_VERDICT_PRIOR_SESSION]" >> handed; m=0; if [ "$n" != 2 ]; then m=1; fi; "#,
+        r#"echo "VERDICT: major=$m moderate=0 minor=0""#
+    );
+    repo.declare_codex(escalating, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    assert_eq!(repo.attest(AIM).code, 1);
+    let first = repo
+        .read("threads")
+        .lines()
+        .last()
+        .expect("a thread")
+        .to_string();
+    repo.write("src.rs", "reworked");
+    repo.stage(&["src.rs"]);
+    assert_eq!(repo.again().code, 0);
+    assert!(
+        repo.read("handed").ends_with(&format!("[{first}]\n")),
+        "{}",
+        repo.read("handed")
+    );
+    assert_eq!(repo.codex_links(), Vec::new());
+
+    repo.commit();
+    repo.write("src.rs", "changed again");
+    repo.stage(&["src.rs"]);
+    assert_eq!(repo.attest(AIM).code, 1);
+    repo.write("rubric.md", "a different standard");
+    repo.write("src.rs", "reworked again");
+    repo.stage(&["src.rs"]);
+    repo.again();
+    assert!(
+        repo.read("handed").ends_with("[]\n[]\n"),
+        "a thread briefed with the old rubric was resumed: {}",
+        repo.read("handed")
+    );
+}
+
 #[test]
 fn a_round_that_left_no_transcript_opens_a_fresh_reviewer() {
     let repo = Repo::new();

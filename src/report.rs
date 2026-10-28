@@ -197,21 +197,26 @@ pub fn judging() {
     eprintln!("git-agent-verdict: validating the intent");
 }
 
-// A command, not a rendered digest: a format invented here is a format maintained here forever.
-const LATEST: &str = r#"jq -rc 'select(.type=="assistant") | .timestamp[11:19] as $t | .message.content[] | if .type=="tool_use" then "\($t) \(.name) \(.input|tostring|gsub("\n";" "))" elif .type=="text" then "\($t) » \(.text|gsub("\n";" "))" else empty end'"#;
-
 // Said before the reviewer runs, not after: a killed run never reaches an "after".
-pub fn reviewing(gate: &str, session: &str, transcript: Option<&std::path::Path>) {
+pub fn reviewing(gate: &str, session: &str, transcript: Option<&std::path::Path>, latest: &str) {
     eprintln!(
         "git-agent-verdict: {gate}: reviewing — session {session}, pid {}",
         std::process::id()
     );
-    let Some(path) = transcript else {
-        return;
-    };
+    if let Some(path) = transcript {
+        progress_log(path, latest);
+    }
+}
+
+// The handle names the session to this tool; codex, and anyone resuming it by hand, knows only the thread.
+pub fn thread_named(session: &str, thread: &str) {
+    eprintln!("git-agent-verdict: session {session} is codex thread {thread}");
+}
+
+pub fn progress_log(path: &std::path::Path, latest: &str) {
     println!("progress log: {}", path.display());
     println!(
-        "  latest activity: {LATEST} {} | cut -c1-110 | tail -5",
+        "  latest activity: {latest} {} | cut -c1-110 | tail -5",
         path.display()
     );
 }

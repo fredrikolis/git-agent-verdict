@@ -29,39 +29,41 @@ struct Round {
     session: crate::agent::Session,
 }
 
-fn round_for(declaration: &Declaration, steps: &[state::Step]) -> Result<Round, String> {
+fn round_for(
+    agent: crate::agent::Agent,
+    declaration: &Declaration,
+    steps: &[state::Step],
+    system: &str,
+) -> Result<Round, String> {
     if let Some(held) = state::in_flight()? {
-        if held.gate == declaration.gate && crate::agent::transcript(&held.session).is_some() {
+        if held.gate == declaration.gate && agent.resumable(&held.session, system) {
             return Ok(Round {
                 opening: Opening::Interrupted,
                 session: crate::agent::Session::resumed(&held.session),
             });
         }
     }
-    Ok(match prior_session(declaration, steps) {
-        Some(session) => Round {
-            opening: Opening::Again,
-            session: crate::agent::Session::resumed(&session),
+    // Another runner's session, or one briefed differently, starts over.
+    Ok(
+        match prior_session(declaration, steps).filter(|s| agent.resumable(s, system)) {
+            Some(session) => Round {
+                opening: Opening::Again,
+                session: crate::agent::Session::resumed(&session),
+            },
+            None => Round {
+                opening: Opening::First,
+                session: crate::agent::Session::opened(),
+            },
         },
-        None => Round {
-            opening: Opening::First,
-            session: crate::agent::Session::opened(),
-        },
-    })
+    )
 }
 
-fn briefing(
-    declaration: &Declaration,
-    intent: &str,
-    round: &Round,
-) -> Result<(String, String), String> {
-    let system = crate::brief::system(declaration, crate::brief::Reach::Diff)?;
-    let prompt = match round.opening {
+fn prompt_for(intent: &str, round: &Round) -> String {
+    match round.opening {
         Opening::First => crate::brief::opening(intent),
         Opening::Again => crate::brief::continuing(),
         Opening::Interrupted => crate::brief::resuming(),
-    };
-    Ok((system, prompt))
+    }
 }
 
 fn review(
@@ -83,20 +85,26 @@ fn review(
                 read_only: declaration.read_only,
             },
         )
-        .map_err(|said| declared_model_fault(declaration, &said))?;
+        .map_err(|said| declared_model_fault(declaration, *agent, &said))?;
     let verdicts = crate::runner::verdicts(&answer, declaration.brief.simple)?;
     Ok((verdicts, crate::runner::findings(&answer.text)))
 }
 
 // A model the agent won't answer for is the hook's wiring, not this commit's — naming the declaration turns it into the maintenance it is.
-fn declared_model_fault(declaration: &Declaration, said: &str) -> String {
+fn declared_model_fault(
+    declaration: &Declaration,
+    agent: crate::agent::Agent,
+    said: &str,
+) -> String {
     let Some(model) = &declaration.model else {
         return said.to_string();
     };
     let hook = git::hook_path().unwrap_or_else(|_| "the commit-msg hook".to_string());
     format!(
-        "gate '{}' declares --model {model}, and the agent answered:\n  {said}\nThe declaration is in {hook}. Changing it is maintenance, committed with --no-verify.",
-        declaration.gate
+        "gate '{}' declares --model {model}, and {} answered:\n  {said}\nA --model names a model of one runner, and this host's agent-verdict.runner is {}. The declaration is in {hook}. Changing it is maintenance, committed with --no-verify.",
+        declaration.gate,
+        agent.name(),
+        agent.name()
     )
 }
 
@@ -315,22 +323,24 @@ fn review_one(
 ) -> Result<bool, String> {
     let agent = crate::runner::configured()?;
     round.at_gate(&declaration.gate);
-    let opened = round_for(declaration, steps)?;
+    // Built before the marker: a wiring fault here shouldn't spend an interrupted round's one resume.
+    let system = crate::brief::system(declaration, crate::brief::Reach::Diff)?;
+    let opened = round_for(agent, declaration, steps, &system)?;
     if matches!(opened.opening, Opening::Interrupted) {
         report::resuming(
             &declaration.gate,
             opened.session.id(),
-            crate::agent::last_wrote(opened.session.id()),
+            agent.last_wrote(opened.session.id()),
         );
     }
-    // Built before the marker: a wiring fault here shouldn't spend an interrupted round's one resume.
-    let (system, prompt) = briefing(declaration, intent, &opened)?;
+    let prompt = prompt_for(intent, &opened);
     // Written before the reviewer spawns, so a round that dies still leaves a marker naming what it was doing.
     state::open_round(&declaration.gate, opened.session.id())?;
     report::reviewing(
         &declaration.gate,
         opened.session.id(),
-        crate::agent::transcript_path(opened.session.id()).as_deref(),
+        agent.transcript_path(opened.session.id()).as_deref(),
+        agent.latest_activity(),
     );
     crate::signals::say(&format!(
         "while reviewing {}, session {}.",
