@@ -121,6 +121,9 @@ impl Repo {
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
             // Its own HOME: the tool writes transcripts and reports under it, and the real one would leak between tests.
             .env("HOME", self.home())
+            // Either would point an agent's home outside the test's own.
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("CODEX_HOME")
             .env(
                 "PATH",
                 format!(
@@ -362,6 +365,58 @@ fi
         let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
         std::fs::set_permissions(&path, mode).expect("chmod");
         git(&self.dir, &["config", "agent-verdict.runner", "claude"]);
+    }
+
+    // As `codex exec --json` answers: thread.started first, a rollout under ~/.codex/sessions opening on the brief, the reply as an agent_message. A body that fails is a failed turn.
+    pub fn declare_codex(&self, body: &str, gates: &[&str]) {
+        self.hook(gates);
+        let bin = self.dir.join("bin");
+        std::fs::create_dir_all(&bin).expect("bin dir");
+        let stub = format!(
+            r#"#!/bin/sh
+brief=""; resume=""; prev=""
+for a in "$@"; do
+  case "$a" in developer_instructions=*) brief="${{a#developer_instructions=}}" ;; esac
+  [ "$prev" = resume ] && resume="$a"
+  prev="$a"
+done
+thread="${{resume:-$(python3 -c 'import uuid; print(uuid.uuid4())')}}"
+echo "$thread" >> threads
+echo "{{\"type\":\"thread.started\",\"thread_id\":\"$thread\"}}"
+day="$HOME/.codex/sessions/2026/01/02"; mkdir -p "$day"
+log="$day/rollout-2026-01-02T03-04-05-$thread.jsonl"
+[ -f "$log" ] || printf '{{"type":"response_item","payload":{{"type":"message","role":"developer","content":[{{"type":"input_text","text":%s}}]}}}}\n' "$brief" > "$log"
+export AGENT_VERDICT_PRIOR_SESSION="$resume"
+case "$brief" in
+  *"You judge one line of text"*) text="VERDICT: accepted" ;;
+  *) text=$({body}) || {{
+       TEXT="$text" python3 -c 'import json, os; print(json.dumps({{"type": "turn.failed", "error": {{"message": os.environ["TEXT"]}}}}))'
+       exit 1
+     }} ;;
+esac
+TEXT="$text" python3 -c 'import json, os; print(json.dumps({{"type": "item.completed", "item": {{"id": "item_0", "type": "agent_message", "text": os.environ["TEXT"]}}}})); print(json.dumps({{"type": "turn.completed", "usage": {{}}}}))'
+"#
+        );
+        let path = bin.join("codex");
+        std::fs::write(&path, stub).expect("write stub");
+        let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
+        std::fs::set_permissions(&path, mode).expect("chmod");
+        git(&self.dir, &["config", "agent-verdict.runner", "codex"]);
+    }
+
+    // The handle each live codex link maps, and the thread it maps to.
+    pub fn codex_links(&self) -> Vec<(String, String)> {
+        let dir = self.dir.join(".git").join("AGENT_VERDICT_CODEX_THREADS");
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        entries
+            .flatten()
+            .map(|entry| {
+                let thread = std::fs::read_to_string(entry.path()).expect("link");
+                (entry.file_name().to_string_lossy().into_owned(), thread)
+            })
+            .collect()
     }
 
     pub fn judge(&self, answer: &str) {

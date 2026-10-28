@@ -208,6 +208,11 @@ pub fn reviewing(gate: &str, session: &str, transcript: Option<&std::path::Path>
     }
 }
 
+// The handle names the session to this tool; codex, and anyone resuming it by hand, knows only the thread.
+pub fn thread_named(session: &str, thread: &str) {
+    eprintln!("git-agent-verdict: session {session} is codex thread {thread}");
+}
+
 pub fn progress_log(path: &std::path::Path, latest: &str) {
     println!("progress log: {}", path.display());
     println!(

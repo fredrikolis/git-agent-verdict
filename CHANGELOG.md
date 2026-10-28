@@ -7,10 +7,14 @@
 ## [2.4.0] - 2026-10-28
 
 ### Added
-- `git config agent-verdict.runner codex` runs the reviewer on OpenAI Codex CLI; `--model` names a model of the host's runner.
+- `git config agent-verdict.runner codex` runs the reviewer on OpenAI Codex CLI.
+- `--model` names a model of the host's runner, so a hook shared by hosts running different agents leaves it out.
 
 ### Changed
 - A recorded session the configured runner holds no transcript for starts a first round, not a failing resume.
+
+### Fixed
+- A Claude transcript under `$CLAUDE_CONFIG_DIR` is found, so its session resumes.
 
 ## [2.3.0] - 2026-09-17
 

@@ -35,7 +35,7 @@ const GUIDE: &str = r#"CONFIGURING A REPOSITORY — git-agent-verdict
    - A gate needs one --standard, --doc or --rule, and takes any mix.
    - --simple removes the MAJOR severity: reports, never blocks.
    - --read-only refuses the reviewer every write, at the harness. For a tree someone else is
-     working in, or or a reviewer that must not write. Without it, the agent's own settings
+     working in, or a reviewer that must not write. Without it, the agent's own settings
      decide what it may write, codex's sandbox_mode included.
    - --model is passed through unchecked. If omitted, the agent selects one. It names a model of
      the host's runner (step 3): opus is a claude model and fails under codex, so a hook shared

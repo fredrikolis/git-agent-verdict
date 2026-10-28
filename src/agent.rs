@@ -89,7 +89,8 @@ impl Agent {
             Agent::Claude => self.transcript(session).is_some(),
             Agent::Codex => codex_transcript(session)
                 .and_then(|path| std::fs::read_to_string(path).ok())
-                .is_some_and(|log| log.contains(escaped(system).as_str())),
+                .and_then(|log| briefed(&log))
+                .is_some_and(|brief| brief == system),
         }
     }
 
@@ -143,17 +144,19 @@ impl Agent {
 
     fn stalled_on(self, session: &str) -> Option<String> {
         let text = std::fs::read_to_string(self.transcript(session)?).ok()?;
-        // Codex follows each tool call with bookkeeping lines.
-        let window = match self {
-            Agent::Claude => 6,
-            Agent::Codex => 30,
+        let tail: String = match self {
+            Agent::Claude => text.lines().rev().take(6).collect::<Vec<_>>().join(" "),
+            // Codex hands a denial back to the model instead of waiting on it, so only a denial in its last item is where it stopped.
+            Agent::Codex => text
+                .lines()
+                .rev()
+                .find(|line| {
+                    serde_json::from_str::<serde_json::Value>(line)
+                        .is_ok_and(|record| record["type"] == "response_item")
+                })
+                .unwrap_or_default()
+                .to_string(),
         };
-        let tail: String = text
-            .lines()
-            .rev()
-            .take(window)
-            .collect::<Vec<_>>()
-            .join(" ");
         self.denials()
             .iter()
             .find(|mark| tail.contains(*mark))
@@ -469,20 +472,24 @@ fn slug(dir: &std::path::Path) -> String {
         .collect()
 }
 
+fn claude_projects() -> Option<std::path::PathBuf> {
+    let root = match std::env::var_os("CLAUDE_CONFIG_DIR").filter(|dir| !dir.is_empty()) {
+        Some(dir) => std::path::PathBuf::from(dir),
+        None => std::path::Path::new(&std::env::var("HOME").ok()?).join(".claude"),
+    };
+    Some(root.join("projects"))
+}
+
 fn claude_transcript_path(session: &str) -> Option<std::path::PathBuf> {
-    let home = std::env::var("HOME").ok()?;
     Some(
-        std::path::Path::new(&home)
-            .join(".claude")
-            .join("projects")
+        claude_projects()?
             .join(slug(&std::env::current_dir().ok()?))
             .join(format!("{session}.jsonl")),
     )
 }
 
 fn claude_transcript(session: &str) -> Option<std::path::PathBuf> {
-    let home = std::env::var("HOME").ok()?;
-    let projects = std::path::Path::new(&home).join(".claude").join("projects");
+    let projects = claude_projects()?;
     let named = format!("{session}.jsonl");
     let derived = claude_transcript_path(session)?;
     if derived.is_file() {
@@ -539,7 +546,7 @@ fn codex(
         }
     };
     let told = |detail: String| Agent::Codex.with_transcript(&detail, session.id());
-    let said = piped(
+    let ran = piped(
         Agent::Codex,
         role,
         command,
@@ -548,15 +555,14 @@ fn codex(
         session.id(),
         tap,
     )
-    .map_err(told)?;
-    let read = read_codex(&said);
-    // Kept after a fresh session fails, for resuming it; a resume gets one attempt.
-    if read.is_ok() || matches!(session, Session::Resume(_)) {
-        if let Ok(dir) = threads() {
-            let _ = std::fs::remove_file(dir.join(session.id()));
-        }
+    .and_then(|said| read_codex(&said))
+    .map_err(told);
+    // Only a fresh review that failed is taken up again through its link; a resume gets one attempt.
+    let kept = ran.is_err() && matches!(session, Session::Fresh(_)) && matches!(role, Role::Review);
+    if let (false, Ok(dir)) = (kept, threads()) {
+        let _ = std::fs::remove_file(dir.join(session.id()));
     }
-    let (text, thread) = read.map_err(told)?;
+    let (text, thread) = ran?;
     // The event stream never names the model; the transcript does, per turn.
     let reviewer = codex_transcript(&thread)
         .and_then(|path| std::fs::read_to_string(path).ok())
@@ -570,31 +576,63 @@ fn codex(
     })
 }
 
-// Valid in a TOML basic string, and as codex's transcript writes the brief.
+// JSON's escapes, plus DEL, which JSON leaves raw and a TOML basic string forbids.
 fn escaped(text: &str) -> String {
     let quoted = serde_json::Value::from(text).to_string();
-    quoted[1..quoted.len() - 1].to_string()
+    quoted[1..quoted.len() - 1].replace('\u{7f}', "\\u007F")
+}
+
+// The brief codex was started with: the first developer message, as -c developer_instructions put it there.
+fn briefed(log: &str) -> Option<String> {
+    log.lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|record| {
+            record["type"] == "response_item"
+                && record["payload"]["type"] == "message"
+                && record["payload"]["role"] == "developer"
+        })?["payload"]["content"]
+        .as_array()?
+        .iter()
+        .find(|item| item["type"] == "input_text")?["text"]
+        .as_str()
+        .map(str::to_string)
 }
 
 fn threads() -> Result<std::path::PathBuf, String> {
     git::git_path("AGENT_VERDICT_CODEX_THREADS")
 }
 
+// Past any round worth taking up: an audit's or an abandoned round's link is never read again.
+const STALE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
 // Codex picks its own session id; linking the handle to it lets a round killed mid-review resume it.
 fn linking(handle: &str, role: Role) -> Result<Tap, String> {
     let dir = threads()?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    for old in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        let age = old.metadata().and_then(|m| m.modified()).ok();
+        if age
+            .and_then(|at| at.elapsed().ok())
+            .is_some_and(|age| age > STALE)
+        {
+            let _ = std::fs::remove_file(old.path());
+        }
+    }
     let link = dir.join(handle);
+    let handle = handle.to_string();
     let sessions = codex_home().map(|home| home.join("sessions"));
     Ok(Box::new(move |seen: &[u8]| {
         let Some(thread) = thread_started(&String::from_utf8_lossy(seen)) else {
             return false;
         };
         let _ = std::fs::write(&link, &thread);
-        // The file, and so its day and time, does not exist yet.
-        if let (Role::Review, Some(sessions)) = (role, &sessions) {
-            let log = sessions.join(format!("*/*/*/rollout-*-{thread}.jsonl"));
-            crate::report::progress_log(&log, Agent::Codex.latest_activity());
+        if let Role::Review = role {
+            crate::report::thread_named(&handle, &thread);
+            // The file, and so its day and time, does not exist yet.
+            if let Some(sessions) = &sessions {
+                let log = sessions.join(format!("*/*/*/rollout-*-{thread}.jsonl"));
+                crate::report::progress_log(&log, Agent::Codex.latest_activity());
+            }
         }
         true
     }))
@@ -763,7 +801,7 @@ fn read_claude(said: &Said) -> Result<Answer, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{read_codex, rollout_of, slug, Said};
+    use super::{escaped, read_codex, rollout_of, slug, Said};
 
     // Raw wait statuses: the exit code sits in the second byte.
     fn said(out: &str, code: i32, err: &str) -> Said {
@@ -818,6 +856,12 @@ mod tests {
             ),
             "{failed}"
         );
+    }
+
+    // A TOML basic string forbids DEL, which JSON leaves raw.
+    #[test]
+    fn a_brief_is_escaped_for_a_toml_basic_string() {
+        assert_eq!(escaped("a\u{7f}\"b\"\n"), "a\\u007F\\\"b\\\"\\n");
     }
 
     #[test]
