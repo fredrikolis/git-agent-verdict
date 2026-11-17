@@ -64,6 +64,11 @@ git config --global agent-verdict.runner claude   # or codex
 
 Installs as `git agent-verdict`.
 
+A reviewer's session is deleted from the agent's own session list once its commit lands, so it
+doesn't crowd tools that list sessions. Versions before 2.5 left them behind; preview what
+`git agent-verdict --prune-sessions` finds, then add `--confirm` to delete them. It keeps anything
+touched in the last day; a commit idle longer than that reviews afresh.
+
 ## Configure a repo
 
 Declare one gate per line in the `commit-msg` hook. Line order is review order, and the gate name
@@ -99,5 +104,5 @@ repo. `--help` is the flag grammar.
 ## Contributing
 
 The reviewer runs on Claude Code or OpenAI Codex CLI today. **Please help us add support for other
-agents.** The seam is `src/runner.rs` and `src/agent.rs`: an agent is an argv, a session, and an
-answer this tool parses verdicts out of. Nothing above that layer knows which one answered.
+agents.** The seam is `src/runner.rs` and `src/agent.rs`: an agent is an argv, a session it can
+discard, and an answer this tool parses verdicts out of. Nothing above that layer knows which one answered.

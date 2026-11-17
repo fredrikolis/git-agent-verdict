@@ -302,10 +302,11 @@ impl Repo {
         std::fs::create_dir_all(&bin).expect("bin dir");
         let stub = format!(
             r#"#!/bin/sh
-system=""; resume=""; assigned=""; mode=""
+system=""; resume=""; assigned=""; mode=""; unsaved=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --append-system-prompt-file) system="$2"; shift 2 ;;
+    --no-session-persistence) unsaved=1; shift ;;
     --resume) resume="$2"; shift 2 ;;
     --session-id) assigned="$2"; shift 2 ;;
     --permission-mode) mode="$2"; shift 2 ;;
@@ -328,7 +329,7 @@ else
 fi
 export SID=$(cat session 2>/dev/null || echo s-1) TEXT="$text"
 projects="$HOME/.claude/projects/$(pwd | sed 's/[^A-Za-z0-9]/-/g')"
-mkdir -p "$projects" && echo '{{}}' >> "$projects/$SID.jsonl"
+[ -n "$unsaved" ] || {{ mkdir -p "$projects" && echo '{{}}' >> "$projects/$SID.jsonl"; }}
 python3 -c 'import json, os; print(json.dumps({{"is_error": False, "result": os.environ["TEXT"], "session_id": os.environ["SID"], "modelUsage": {{"fake-model": {{}}}}}}))'
 "#
         );
@@ -374,9 +375,14 @@ fi
         std::fs::create_dir_all(&bin).expect("bin dir");
         let stub = format!(
             r#"#!/bin/sh
-brief=""; resume=""; prev=""
+if [ "$1" = delete ]; then
+  echo "$3" >> deleted
+  rm -f "$HOME"/.codex/sessions/*/*/*/rollout-*-"$3".jsonl
+  exit 0
+fi
+brief=""; resume=""; prev=""; unsaved=""
 for a in "$@"; do
-  case "$a" in developer_instructions=*) brief="${{a#developer_instructions=}}" ;; esac
+  case "$a" in developer_instructions=*) brief="${{a#developer_instructions=}}" ;; --ephemeral) unsaved=1 ;; esac
   [ "$prev" = resume ] && resume="$a"
   prev="$a"
 done
@@ -385,7 +391,7 @@ echo "$thread" >> threads
 echo "{{\"type\":\"thread.started\",\"thread_id\":\"$thread\"}}"
 day="$HOME/.codex/sessions/2026/01/02"; mkdir -p "$day"
 log="$day/rollout-2026-01-02T03-04-05-$thread.jsonl"
-[ -f "$log" ] || printf '{{"type":"response_item","payload":{{"type":"message","role":"developer","content":[{{"type":"input_text","text":%s}}]}}}}\n' "$brief" > "$log"
+[ -n "$unsaved" ] || [ -f "$log" ] || printf '{{"type":"response_item","payload":{{"type":"message","role":"developer","content":[{{"type":"input_text","text":%s}}]}}}}\n' "$brief" > "$log"
 export AGENT_VERDICT_PRIOR_SESSION="$resume"
 case "$brief" in
   *"You judge one line of text"*) text="VERDICT: accepted" ;;
@@ -402,6 +408,23 @@ TEXT="$text" python3 -c 'import json, os; print(json.dumps({{"type": "item.compl
         let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
         std::fs::set_permissions(&path, mode).expect("chmod");
         git(&self.dir, &["config", "agent-verdict.runner", "codex"]);
+    }
+
+    // Every transcript either agent's stub left under this test's own home.
+    pub fn saved_sessions(&self) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        let mut dirs = vec![self.home()];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if path.extension().is_some_and(|ext| ext == "jsonl") {
+                    found.push(path);
+                }
+            }
+        }
+        found
     }
 
     // The handle each live codex link maps, and the thread it maps to.

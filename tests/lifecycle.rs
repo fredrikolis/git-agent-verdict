@@ -179,6 +179,26 @@ fn a_codex_resume_that_fails_names_its_transcript_and_drops_its_link() {
     assert_eq!(repo.codex_links(), Vec::new());
 }
 
+// The resume that fails drops the link, so only what was resolved while it stood still names the thread.
+#[test]
+fn a_reset_deletes_a_codex_thread_whose_resume_failed() {
+    let repo = Repo::new();
+    let hangs_then_fails = concat!(
+        r#"n=$(cat rounds 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > rounds; "#,
+        r#"if [ "$n" = 1 ]; then sleep 60; fi; "#,
+        r#"echo "the model went away"; exit 1"#
+    );
+    repo.declare_codex(hangs_then_fails, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    assert_eq!(repo.attest_within(AIM, "2s").code, 2);
+    let (_, thread) = repo.codex_links().pop().expect("a link");
+    assert_eq!(repo.again().code, 2);
+    let root = repo.root();
+    let reset = repo.capture(&["reset", "--repo", &root, "the change changed shape"]);
+    assert_eq!(reset.code, 0, "{}", reset.err);
+    assert_eq!(repo.read("deleted"), format!("{thread}\n"));
+}
+
 // Codex keeps the brief its thread started with, so a changed brief cannot be resumed into it.
 #[test]
 fn a_codex_gate_resumes_its_thread_only_while_its_brief_is_unchanged() {
@@ -400,4 +420,76 @@ fn reset_during_a_round_names_abort() {
     assert_eq!(refused.code, 2, "{}", refused.err);
     assert!(refused.err.contains("abort"), "{}", refused.err);
     assert_eq!(repo.aborted().code, 0);
+}
+
+#[test]
+fn a_landed_commit_takes_its_reviewers_claude_sessions_with_it() {
+    let repo = Repo::new();
+    repo.declare(BLOCKER, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    assert_eq!(repo.attest(AIM).code, 1);
+    repo.declare(CLEAN, &[STANDARDS]);
+    repo.write("src.rs", "reworked");
+    repo.stage(&["src.rs"]);
+    assert_eq!(repo.again().code, 0);
+    assert_eq!(
+        repo.saved_sessions().len(),
+        1,
+        "the review left no session to resume"
+    );
+    let landed = repo.commit();
+    assert_eq!(landed.code, 0, "{}", landed.err);
+    assert_eq!(repo.saved_sessions(), Vec::<std::path::PathBuf>::new());
+}
+
+#[test]
+fn a_landed_commit_deletes_its_codex_threads_through_codex() {
+    let repo = Repo::new();
+    repo.declare_codex(&format!("echo '{CLEAN}'"), &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    assert_eq!(repo.attest(AIM).code, 0);
+    // The judge's thread was never saved: only the review's rollout is on disk.
+    assert_eq!(repo.saved_sessions().len(), 1);
+    let review = repo
+        .read("threads")
+        .lines()
+        .last()
+        .expect("a thread")
+        .to_string();
+    assert_eq!(repo.commit().code, 0);
+    assert_eq!(repo.read("deleted"), format!("{review}\n"));
+    assert_eq!(repo.saved_sessions(), Vec::<std::path::PathBuf>::new());
+}
+
+#[test]
+fn an_intent_judged_alone_leaves_no_session() {
+    let repo = Repo::new();
+    repo.declare(CLEAN, &[STANDARDS]);
+    repo.judge("VERDICT: refused — gives a reason");
+    repo.stage(&["src.rs"]);
+    assert_eq!(repo.attest(AIM).code, 2);
+    assert_eq!(repo.saved_sessions(), Vec::<std::path::PathBuf>::new());
+}
+
+#[test]
+fn a_reset_discards_the_sessions_it_clears() {
+    let repo = Repo::new();
+    repo.declare(BLOCKER, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    assert_eq!(repo.attest(AIM).code, 1);
+    assert_eq!(repo.saved_sessions().len(), 1);
+    let root = repo.root();
+    let reset = repo.capture(&["reset", "--repo", &root, "the change changed shape"]);
+    assert_eq!(reset.code, 0, "{}", reset.err);
+    assert_eq!(repo.saved_sessions(), Vec::<std::path::PathBuf>::new());
+}
+
+#[test]
+fn an_answered_audit_leaves_no_session() {
+    let repo = Repo::new();
+    repo.declare(CLEAN, &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    let audit = repo.audit();
+    assert_eq!(audit.code, 0, "{}", audit.err);
+    assert_eq!(repo.saved_sessions(), Vec::<std::path::PathBuf>::new());
 }

@@ -43,6 +43,8 @@ fn sweep(
     crate::signals::quiet();
     let answer = answered?;
     let verdicts = runner::verdicts(&answer, declaration.brief.simple)?;
+    // Kept only when it failed: a failure names the transcript, and an answered sweep never resumes.
+    agent.discard(&answer.session);
     Ok((verdicts, runner::findings(&answer.text)))
 }
 

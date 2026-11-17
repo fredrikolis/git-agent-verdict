@@ -15,7 +15,8 @@ pub const USAGE: &str = concat!(
     "       git-agent-verdict --standards [<name>]\n",
     "       git-agent-verdict --reviewer-prompt <gate>\n",
     "       git-agent-verdict --require-version <major.minor>\n",
-    "       git-agent-verdict --repo-setup-guide"
+    "       git-agent-verdict --repo-setup-guide\n",
+    "       git-agent-verdict --prune-sessions [--confirm]"
 );
 
 // Undocumented and unlisted: an agent meets it only in the refusal it answers, the one place it's worth anything.
@@ -97,6 +98,8 @@ pub enum Mode {
     ReviewerPrompt(String),
     RequireVersion(String),
     RepoSetupGuide,
+    // Previews unless confirmed: it deletes across every project on the machine.
+    PruneSessions(bool),
     Standards(Option<String>),
 }
 
@@ -154,6 +157,8 @@ struct Parsed {
     reviewer_prompt: Option<String>,
     require_version: Option<String>,
     setup_guide: bool,
+    prune_sessions: bool,
+    confirm: bool,
     list_standards: bool,
     read_only: bool,
     intent: Option<String>,
@@ -176,6 +181,8 @@ fn collect(args: impl Iterator<Item = String>) -> Result<Parsed, String> {
         match arg.as_str() {
             "--repo-setup-guide" => p.setup_guide = true,
             "--standards" => p.list_standards = true,
+            "--prune-sessions" => p.prune_sessions = true,
+            "--confirm" => p.confirm = true,
             "--reviewer-prompt" => {
                 p.reviewer_prompt = Some(args.next().ok_or("--reviewer-prompt needs a gate name")?);
             }
@@ -228,6 +235,8 @@ fn only(detail: &str, p: &Parsed, takes: &[&str]) -> Result<(), String> {
     let given = [
         ("--repo-setup-guide", p.setup_guide),
         ("--standards", p.list_standards),
+        ("--prune-sessions", p.prune_sessions),
+        ("--confirm", p.confirm),
         ("--reviewer-prompt", p.reviewer_prompt.is_some()),
         ("--require-version", p.require_version.is_some()),
         ("--intent", p.intent.is_some()),
@@ -396,6 +405,18 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Mode, String> {
             }
         }
         return Ok(Mode::Standards(named));
+    }
+    // Not one repo's: a reviewer's session is filed under the agent's home, wherever the repo was.
+    if p.prune_sessions {
+        only(
+            "--prune-sessions takes --confirm only",
+            &p,
+            &["--prune-sessions", "--confirm"],
+        )?;
+        return Ok(Mode::PruneSessions(p.confirm));
+    }
+    if p.confirm {
+        return Err("--confirm belongs to --prune-sessions".to_string());
     }
     // Answered from nothing at all: it is the one mode that works outside a repo, which is where someone wiring one up starts.
     if p.setup_guide {

@@ -115,6 +115,72 @@ impl Agent {
         Some(written.elapsed().ok()?.as_secs())
     }
 
+    // What a session is filed under: codex's thread, once a link names it; otherwise the id itself.
+    pub fn resolved(self, session: &str) -> String {
+        match self {
+            Agent::Claude => session.to_string(),
+            Agent::Codex => codex_thread(session),
+        }
+    }
+
+    // Gone from the agent's own session lists too, not only from this tool's: called once nothing will resume it.
+    pub fn discard(self, session: &str) {
+        if session.is_empty() || session.starts_with('.') || session.contains('/') {
+            return;
+        }
+        match self {
+            Agent::Claude => {
+                if let Some(path) = claude_transcript(session) {
+                    forget_claude(&path);
+                }
+            }
+            Agent::Codex => {
+                if let Some(path) = codex_transcript(session) {
+                    forget_codex(&codex_thread(session), &path);
+                }
+                if let Ok(dir) = threads() {
+                    let _ = std::fs::remove_file(dir.join(session));
+                }
+            }
+        }
+    }
+
+    // Every transcript on this machine a run of this tool opened: headless, and opened on a prompt `ours` recognizes.
+    pub fn leftovers(self, ours: &dyn Fn(&str) -> bool) -> Vec<Leftover> {
+        match self {
+            Agent::Claude => claude_projects()
+                .and_then(|projects| std::fs::read_dir(projects).ok())
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter_map(|project| std::fs::read_dir(project.path()).ok())
+                .flatten()
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
+                .filter(|path| claude_opening(path).is_some_and(|first| ours(&first)))
+                .map(|path| Leftover {
+                    agent: self,
+                    thread: String::new(),
+                    path,
+                })
+                .collect(),
+            Agent::Codex => codex_rollouts()
+                .into_iter()
+                .filter_map(|path| {
+                    // A .zst rollout is never matched: only codex reads one back.
+                    let thread = rollout_thread(path.file_name()?.to_str()?)
+                        .filter(|_| path.extension().is_some_and(|ext| ext == "jsonl"))?;
+                    codex_opened(&path, ours).then_some(Leftover {
+                        agent: self,
+                        thread,
+                        path,
+                    })
+                })
+                .collect(),
+        }
+    }
+
     // A command, not a rendered digest: a format invented here is a format maintained here forever.
     pub fn latest_activity(self) -> &'static str {
         match self {
@@ -235,6 +301,10 @@ fn claude(
     };
     if let Some(model) = claude_model(role, terms.model) {
         command.args(["--model", model]);
+    }
+    // Asked once and never resumed: a saved session would only crowd the user's own session lists.
+    if let Role::JudgeIntent = role {
+        command.arg("--no-session-persistence");
     }
     // dontAsk denies whatever would have prompted, since a headless run has no one to ask; plan mode additionally keeps a read-only reviewer from writing.
     let mode = if terms.read_only { "plan" } else { "dontAsk" };
@@ -472,12 +542,15 @@ fn slug(dir: &std::path::Path) -> String {
         .collect()
 }
 
+fn claude_home() -> Option<std::path::PathBuf> {
+    match std::env::var_os("CLAUDE_CONFIG_DIR").filter(|dir| !dir.is_empty()) {
+        Some(dir) => Some(std::path::PathBuf::from(dir)),
+        None => Some(std::path::Path::new(&std::env::var("HOME").ok()?).join(".claude")),
+    }
+}
+
 fn claude_projects() -> Option<std::path::PathBuf> {
-    let root = match std::env::var_os("CLAUDE_CONFIG_DIR").filter(|dir| !dir.is_empty()) {
-        Some(dir) => std::path::PathBuf::from(dir),
-        None => std::path::Path::new(&std::env::var("HOME").ok()?).join(".claude"),
-    };
-    Some(root.join("projects"))
+    Some(claude_home()?.join("projects"))
 }
 
 fn claude_transcript_path(session: &str) -> Option<std::path::PathBuf> {
@@ -501,6 +574,112 @@ fn claude_transcript(session: &str) -> Option<std::path::PathBuf> {
         .flatten()
         .map(|project| project.path().join(&named))
         .find(|path| path.is_file())
+}
+
+pub struct Leftover {
+    pub agent: Agent,
+    pub path: std::path::PathBuf,
+    thread: String,
+}
+
+impl Leftover {
+    pub fn forget(&self) {
+        match self.agent {
+            Agent::Claude => forget_claude(&self.path),
+            Agent::Codex => forget_codex(&self.thread, &self.path),
+        }
+    }
+}
+
+// Read until the first prompt, never further: a transcript runs to tens of megabytes, and the prompt opens it.
+const OPENING_RECORDS: usize = 50;
+
+fn opening_records(path: &std::path::Path) -> impl Iterator<Item = serde_json::Value> {
+    use std::io::BufRead;
+    std::fs::File::open(path)
+        .ok()
+        .map(std::io::BufReader::new)
+        .into_iter()
+        .flat_map(|reader| reader.lines().map_while(Result::ok))
+        .take(OPENING_RECORDS)
+        .filter_map(|line| serde_json::from_str(&line).ok())
+}
+
+// The prompt a headless run opened on; a session someone typed into is never this tool's.
+fn claude_opening(path: &std::path::Path) -> Option<String> {
+    let first = opening_records(path).find(|record| record["type"] == "user")?;
+    if first["entrypoint"] != "sdk-cli" {
+        return None;
+    }
+    first["message"]["content"].as_str().map(str::to_string)
+}
+
+// Codex opens every thread on context messages of its own, so the prompt is whichever user message the tool's matcher claims.
+fn codex_opened(path: &std::path::Path, ours: &dyn Fn(&str) -> bool) -> bool {
+    let records: Vec<serde_json::Value> = opening_records(path).collect();
+    let headless = records
+        .iter()
+        .find(|record| record["type"] == "session_meta")
+        .is_some_and(|meta| meta["payload"]["originator"] == "codex_exec");
+    headless
+        && records
+            .iter()
+            .filter(|record| {
+                record["type"] == "response_item"
+                    && record["payload"]["type"] == "message"
+                    && record["payload"]["role"] == "user"
+            })
+            .filter_map(|record| record["payload"]["content"].as_array())
+            .flatten()
+            .filter_map(|item| item["text"].as_str())
+            .any(ours)
+}
+
+// What Claude Code files under a session id besides its transcript: subagent and tool-output folders, shell state, edit history, todos.
+fn forget_claude(transcript: &std::path::Path) {
+    let _ = std::fs::remove_file(transcript);
+    let Some(id) = transcript.file_stem().and_then(|stem| stem.to_str()) else {
+        return;
+    };
+    let _ = std::fs::remove_dir_all(transcript.with_extension(""));
+    let Some(home) = claude_home() else { return };
+    let _ = std::fs::remove_dir_all(home.join("session-env").join(id));
+    let _ = std::fs::remove_dir_all(home.join("file-history").join(id));
+    for todo in std::fs::read_dir(home.join("todos"))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        if todo.file_name().to_string_lossy().starts_with(id) {
+            let _ = std::fs::remove_file(todo.path());
+        }
+    }
+}
+
+// Codex's own delete keeps its thread index in step with the rollout. Removing the file is the fallback for a codex too old to have one.
+const DELETING: Duration = Duration::from_secs(30);
+
+fn forget_codex(thread: &str, rollout: &std::path::Path) {
+    let spawned = Command::new("codex")
+        .args(["delete", "--force", thread])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    if let Ok(mut child) = spawned {
+        let by = Instant::now() + DELETING;
+        while matches!(child.try_wait(), Ok(None)) {
+            if Instant::now() > by {
+                let _ = child.kill();
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let _ = child.wait();
+    }
+    if rollout.exists() {
+        let _ = std::fs::remove_file(rollout);
+    }
 }
 
 // Linux's cap on a single argument (MAX_ARG_STRLEN), which the brief rides in as one.
@@ -527,9 +706,9 @@ fn codex(
     if let Some(model) = terms.model {
         command.args(["--model", model]);
     }
-    // No smaller judge model is pinned: codex's lineup moves too fast.
+    // No smaller judge model is pinned: codex's lineup moves too fast. Never resumed, so never saved.
     if let Role::JudgeIntent = role {
-        command.args(["-c", "model_reasoning_effort=\"low\""]);
+        command.args(["-c", "model_reasoning_effort=\"low\"", "--ephemeral"]);
     }
     // exec refuses what would have prompted unless the host's config sets an auto-reviewer; without --read-only, that config picks the sandbox.
     if terms.read_only {
@@ -660,18 +839,28 @@ fn codex_home() -> Option<std::path::PathBuf> {
 }
 
 // rollout-<YYYY-MM-DDTHH-MM-SS>-<thread>[_<rollout>].jsonl[.zst], as codex-rs/rollout names it; only codex reads a .zst back.
+fn rollout_thread(name: &str) -> Option<String> {
+    let core = name.strip_prefix("rollout-")?;
+    let core = core.strip_suffix(".zst").unwrap_or(core);
+    Some(
+        core.strip_suffix(".jsonl")?
+            .get(20..)?
+            .split('_')
+            .next()?
+            .to_string(),
+    )
+}
+
 fn rollout_of(name: &str, thread: &str) -> bool {
-    name.strip_prefix("rollout-")
-        .map(|core| core.strip_suffix(".zst").unwrap_or(core))
-        .and_then(|core| core.strip_suffix(".jsonl"))
-        .and_then(|core| core.get(20..))
-        .is_some_and(|ids| ids.split('_').next() == Some(thread))
+    rollout_thread(name).is_some_and(|named| named == thread)
 }
 
 // Filed under sessions/YYYY/MM/DD by a start day this side does not know.
-fn codex_transcript(session: &str) -> Option<std::path::PathBuf> {
-    let thread = codex_thread(session);
-    let mut found = vec![codex_home()?.join("sessions")];
+fn codex_rollouts() -> Vec<std::path::PathBuf> {
+    let Some(home) = codex_home() else {
+        return Vec::new();
+    };
+    let mut found = vec![home.join("sessions")];
     for _ in 0..4 {
         found = found
             .iter()
@@ -679,7 +868,12 @@ fn codex_transcript(session: &str) -> Option<std::path::PathBuf> {
             .flat_map(|entries| entries.flatten().map(|entry| entry.path()))
             .collect();
     }
-    found.into_iter().find(|path| {
+    found
+}
+
+fn codex_transcript(session: &str) -> Option<std::path::PathBuf> {
+    let thread = codex_thread(session);
+    codex_rollouts().into_iter().find(|path| {
         path.file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| rollout_of(name, &thread))

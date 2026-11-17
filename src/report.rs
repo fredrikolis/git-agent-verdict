@@ -450,3 +450,34 @@ pub fn not_passed(gate: &str) -> String {
         here()
     )
 }
+
+// The paths on stdout, one per line, so a preview can be read or piped; what it amounts to on stderr.
+pub fn leftovers(found: &[crate::agent::Leftover], bytes: u64, confirmed: bool, stuck: usize) {
+    for leftover in found {
+        println!("{}\t{}", leftover.agent.name(), leftover.path.display());
+    }
+    let size = format!("{:.1} MB", bytes as f64 / 1_000_000.0);
+    if confirmed {
+        eprintln!(
+            "git-agent-verdict: deleted {} reviewer session(s) of {}, {size}",
+            found.len() - stuck,
+            found.len()
+        );
+        if stuck > 0 {
+            eprintln!(
+                "  {stuck} could not be deleted; run it again, or remove the listed paths by hand"
+            );
+        }
+        return;
+    }
+    eprintln!(
+        "git-agent-verdict: {} reviewer session(s) left by earlier runs, {size}; none deleted",
+        found.len()
+    );
+    eprintln!(
+        "  sessions touched in the last 24 hours are kept: a commit may still be resuming them"
+    );
+    if !found.is_empty() {
+        eprintln!("  to delete them: git agent-verdict --prune-sessions --confirm");
+    }
+}
