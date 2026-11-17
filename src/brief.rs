@@ -219,6 +219,11 @@ pub fn opening(intent: &str) -> String {
     )
 }
 
+// Every round, and the judge, opens on one of these.
+pub fn opened_here(prompt: &str) -> bool {
+    prompt.starts_with("<diff-intent>") || prompt == sweeping()
+}
+
 pub fn sweeping() -> String {
     "A standard this gate judges by has changed. Review the files in scope, as they now stand, against it.\n\
      There is no commit and no diff. Report what the standard requires, and close with your verdict line.\n"

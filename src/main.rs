@@ -9,6 +9,7 @@ mod declarations;
 mod gate;
 mod git;
 mod lock;
+mod prune;
 mod report;
 mod round;
 mod runner;
@@ -160,6 +161,7 @@ fn main() -> ExitCode {
             }
             Ok(true)
         }),
+        Mode::PruneSessions(confirm) => ("prune-sessions", prune::run(*confirm)),
         Mode::RepoSetupGuide => ("repo-setup-guide", {
             println!("{}", setup::guide());
             Ok(true)

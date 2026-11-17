@@ -249,6 +249,7 @@ pub fn commit() -> Result<bool, String> {
     if landed.is_ok() {
         // Left behind, the next await would answer for a commit nobody is writing.
         crate::round::forget_last();
+        state::retire_landed();
     }
     landed
 }
@@ -335,6 +336,7 @@ fn review_one(
     }
     let prompt = prompt_for(intent, &opened);
     // Written before the reviewer spawns, so a round that dies still leaves a marker naming what it was doing.
+    state::remember(agent, opened.session.id())?;
     state::open_round(&declaration.gate, opened.session.id())?;
     report::reviewing(
         &declaration.gate,
@@ -348,12 +350,17 @@ fn review_one(
         opened.session.id()
     ));
     let reviewed = review(declaration, &agent, (&system, &prompt), &opened, ceiling);
+    // Before a failed resume drops the link; best-effort.
+    let _ = state::remember(agent, &agent.resolved(opened.session.id()));
     crate::signals::quiet();
     // One attempt at taking a round up. If the resumed reviewer fails too, the session is not one this tool can finish, and every run from here would pay again to learn that.
     if reviewed.is_err() && matches!(opened.opening, Opening::Interrupted) {
         state::close_round();
     }
     let (verdicts, findings) = reviewed?;
+    for verdict in &verdicts {
+        let _ = state::remember(agent, &verdict.session);
+    }
     let blocked = verdicts.iter().any(Verdict::blocks);
     state::record(&declaration.gate, &verdicts, blocked)?;
     let after = state::progress()?;

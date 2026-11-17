@@ -4,6 +4,15 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [2.5.0] - 2026-11-17
+
+### Added
+- `--prune-sessions [--confirm]` deletes the reviewer sessions earlier versions left in Claude Code's and Codex's session lists.
+
+### Changed
+- A commit's reviewer sessions are deleted once it lands, is reset, or its diary is orphaned; codex's through `codex delete`.
+- The intent judge runs unsaved (`--no-session-persistence`, `--ephemeral`); an answered audit deletes its session.
+
 ## [2.4.0] - 2026-10-28
 
 ### Added

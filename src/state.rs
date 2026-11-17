@@ -10,6 +10,8 @@ const INTENT: &str = "intent";
 const RESETS: &str = "resets.log";
 const PENDING: &str = "pending";
 const PROPOSED: &str = "proposed-intent";
+// Every session a round of this commit opened, by agent: what to discard once the diary goes.
+const SESSIONS: &str = "sessions";
 
 // A diary, not a vault: `--no-verify` exists. This only stops accidental edits and a grep.
 fn digest(bytes: &[u8], seed: u64) -> u64 {
@@ -67,9 +69,40 @@ fn gc(keep: &Path) {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() && path != keep {
-            let _ = std::fs::remove_dir_all(&path);
+            retire(&path);
         }
     }
+}
+
+// A diary's sessions go with it: nothing can name them to resume once it is gone, and they crowd the agent's own session lists.
+fn retire(dir: &Path) {
+    let ledger = std::fs::read_to_string(dir.join(SESSIONS)).unwrap_or_default();
+    for line in ledger.lines() {
+        let Some((agent, session)) = line.split_once('\t') else {
+            continue;
+        };
+        if let Ok(agent) = crate::agent::Agent::named(agent) {
+            agent.discard(session);
+        }
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+// Its own call because a landed commit moves HEAD: the diary it wrote is now one this repo has moved past.
+pub fn retire_landed() {
+    let _ = here();
+}
+
+pub fn remember(agent: crate::agent::Agent, session: &str) -> Result<(), String> {
+    let path = here()?.join(SESSIONS);
+    let mut text = std::fs::read_to_string(&path).unwrap_or_default();
+    let line = format!("{}\t{session}", agent.name());
+    if text.lines().any(|known| known == line) {
+        return Ok(());
+    }
+    text.push_str(&line);
+    text.push('\n');
+    std::fs::write(&path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
 fn serialize(verdicts: &[Verdict]) -> String {
@@ -250,8 +283,7 @@ pub fn log_reset(reason: &str) -> Result<u32, String> {
     let mut text = std::fs::read_to_string(&path).unwrap_or_default();
     text.push_str(&format!("{}\t{reason}\n", git::head_sha()));
     std::fs::write(&path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
-    let dir = root.join(git::head_sha());
-    let _ = std::fs::remove_dir_all(&dir);
+    retire(&root.join(git::head_sha()));
     resets()
 }
 

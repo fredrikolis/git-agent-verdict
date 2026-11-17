@@ -43,6 +43,7 @@ fn sweep(
     crate::signals::quiet();
     let answer = answered?;
     let verdicts = runner::verdicts(&answer, declaration.brief.simple)?;
+    agent.discard(&answer.session);
     Ok((verdicts, runner::findings(&answer.text)))
 }
 
