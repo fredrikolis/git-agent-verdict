@@ -350,7 +350,7 @@ fn review_one(
         opened.session.id()
     ));
     let reviewed = review(declaration, &agent, (&system, &prompt), &opened, ceiling);
-    // Resolved while a link still names the thread: a failed resume drops it, leaving a handle that resolves to nothing. Best-effort, so a paid review is never lost to bookkeeping.
+    // Before a failed resume drops the link; best-effort.
     let _ = state::remember(agent, &agent.resolved(opened.session.id()));
     crate::signals::quiet();
     // One attempt at taking a round up. If the resumed reviewer fails too, the session is not one this tool can finish, and every run from here would pay again to learn that.

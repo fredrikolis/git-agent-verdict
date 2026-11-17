@@ -98,7 +98,6 @@ pub enum Mode {
     ReviewerPrompt(String),
     RequireVersion(String),
     RepoSetupGuide,
-    // Previews unless confirmed: it deletes across every project on the machine.
     PruneSessions(bool),
     Standards(Option<String>),
 }
@@ -406,7 +405,7 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Mode, String> {
         }
         return Ok(Mode::Standards(named));
     }
-    // Not one repo's: a reviewer's session is filed under the agent's home, wherever the repo was.
+    // Machine-wide: sessions live under the agent's home, not the repo.
     if p.prune_sessions {
         only(
             "--prune-sessions takes --confirm only",

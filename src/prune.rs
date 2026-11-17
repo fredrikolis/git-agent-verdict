@@ -3,7 +3,7 @@
 use crate::agent::{Agent, Leftover};
 use crate::report;
 
-// Past any commit still being written: a round's session goes when its own diary does, and this sweeps what went before that.
+// Spares a commit still being written.
 const SETTLED: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
 fn settled(leftover: &Leftover) -> bool {

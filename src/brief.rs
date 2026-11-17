@@ -219,7 +219,7 @@ pub fn opening(intent: &str) -> String {
     )
 }
 
-// Every round opens on one of these, the judge included, so they mark a session as this tool's wherever it was left.
+// Every round, and the judge, opens on one of these.
 pub fn opened_here(prompt: &str) -> bool {
     prompt.starts_with("<diff-intent>") || prompt == sweeping()
 }

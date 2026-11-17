@@ -115,7 +115,7 @@ impl Agent {
         Some(written.elapsed().ok()?.as_secs())
     }
 
-    // What a session is filed under: codex's thread, once a link names it; otherwise the id itself.
+    // Codex files a session under its thread, once a link names it.
     pub fn resolved(self, session: &str) -> String {
         match self {
             Agent::Claude => session.to_string(),
@@ -123,7 +123,7 @@ impl Agent {
         }
     }
 
-    // Gone from the agent's own session lists too, not only from this tool's: called once nothing will resume it.
+    // Called once nothing will resume it.
     pub fn discard(self, session: &str) {
         if session.is_empty() || session.starts_with('.') || session.contains('/') {
             return;
@@ -145,7 +145,7 @@ impl Agent {
         }
     }
 
-    // Every transcript on this machine a run of this tool opened: headless, and opened on a prompt `ours` recognizes.
+    // Headless transcripts opened on a prompt `ours` recognizes.
     pub fn leftovers(self, ours: &dyn Fn(&str) -> bool) -> Vec<Leftover> {
         match self {
             Agent::Claude => claude_projects()
@@ -168,7 +168,6 @@ impl Agent {
             Agent::Codex => codex_rollouts()
                 .into_iter()
                 .filter_map(|path| {
-                    // A .zst rollout is never matched: only codex reads one back.
                     let thread = rollout_thread(path.file_name()?.to_str()?)
                         .filter(|_| path.extension().is_some_and(|ext| ext == "jsonl"))?;
                     codex_opened(&path, ours).then_some(Leftover {
@@ -591,7 +590,7 @@ impl Leftover {
     }
 }
 
-// Read until the first prompt, never further: a transcript runs to tens of megabytes, and the prompt opens it.
+// Transcripts run to tens of megabytes; the prompt opens them.
 const OPENING_RECORDS: usize = 50;
 
 fn opening_records(path: &std::path::Path) -> impl Iterator<Item = serde_json::Value> {
@@ -614,7 +613,7 @@ fn claude_opening(path: &std::path::Path) -> Option<String> {
     first["message"]["content"].as_str().map(str::to_string)
 }
 
-// Codex opens every thread on context messages of its own, so the prompt is whichever user message the tool's matcher claims.
+// Codex opens a thread on context messages of its own.
 fn codex_opened(path: &std::path::Path, ours: &dyn Fn(&str) -> bool) -> bool {
     let records: Vec<serde_json::Value> = opening_records(path).collect();
     let headless = records
@@ -635,7 +634,6 @@ fn codex_opened(path: &std::path::Path, ours: &dyn Fn(&str) -> bool) -> bool {
             .any(ours)
 }
 
-// What Claude Code files under a session id besides its transcript: subagent and tool-output folders, shell state, edit history, todos.
 fn forget_claude(transcript: &std::path::Path) {
     let _ = std::fs::remove_file(transcript);
     let Some(id) = transcript.file_stem().and_then(|stem| stem.to_str()) else {
@@ -656,7 +654,7 @@ fn forget_claude(transcript: &std::path::Path) {
     }
 }
 
-// Codex's own delete keeps its thread index in step with the rollout. Removing the file is the fallback for a codex too old to have one.
+// Codex's delete also updates its thread index; removing the file is the fallback.
 const DELETING: Duration = Duration::from_secs(30);
 
 fn forget_codex(thread: &str, rollout: &std::path::Path) {

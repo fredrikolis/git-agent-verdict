@@ -1,4 +1,4 @@
-// Concern: what --prune-sessions finds of earlier runs, what it previews, and what it deletes | Non-concern: the sessions a commit's own diary discards (tests/lifecycle.rs) | IO: (agent homes) -> paths, deletions
+// Concern: what --prune-sessions finds of earlier runs, previews, and deletes | Non-concern: sessions a commit's own diary discards (tests/lifecycle.rs) | IO: (agent homes) -> paths, deletions
 
 mod common;
 
