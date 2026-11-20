@@ -12,6 +12,7 @@ const PENDING: &str = "pending";
 const PROPOSED: &str = "proposed-intent";
 // Every session a round of this commit opened, by agent: what to discard once the diary goes.
 const SESSIONS: &str = "sessions";
+const UNDELETED: &str = "undeleted";
 
 // A diary, not a vault: `--no-verify` exists. This only stops accidental edits and a grep.
 fn digest(bytes: &[u8], seed: u64) -> u64 {
@@ -66,26 +67,80 @@ fn gc(keep: &Path) {
     let Ok(entries) = std::fs::read_dir(&root) else {
         return;
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() && path != keep {
-            retire(&path);
-        }
-    }
+    let orphans: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir() && path != keep)
+        .collect();
+    retire(&orphans);
 }
 
-// A diary's sessions go with it: nothing can name them to resume once it is gone, and they crowd the agent's own session lists.
-fn retire(dir: &Path) {
-    let ledger = std::fs::read_to_string(dir.join(SESSIONS)).unwrap_or_default();
+// Past this many tries a session is left to --prune-sessions, rather than costing every commit a wait.
+const RETRIES: u32 = 3;
+
+// Diaries' sessions go with them; one that would not delete outlives its diary in UNDELETED, retried once per retirement.
+fn retire(diaries: &[PathBuf]) {
+    if diaries.is_empty() {
+        return;
+    }
+    let Ok(root) = root() else { return };
+    let path = root.join(UNDELETED);
+    let mut ledger = std::fs::read_to_string(&path).unwrap_or_default();
+    for diary in diaries {
+        ledger.push_str(&std::fs::read_to_string(diary.join(SESSIONS)).unwrap_or_default());
+    }
+    let mut seen = Vec::new();
+    let mut kept = Vec::new();
+    let mut failed = Vec::new();
+    let mut abandoned = Vec::new();
     for line in ledger.lines() {
-        let Some((agent, session)) = line.split_once('\t') else {
+        let mut fields = line.split('\t');
+        let (Some(name), Some(session)) = (fields.next(), fields.next()) else {
             continue;
         };
-        if let Ok(agent) = crate::agent::Agent::named(agent) {
-            agent.discard(session);
+        let tries: u32 = fields.next().and_then(|n| n.parse().ok()).unwrap_or(0);
+        let Ok(agent) = crate::agent::Agent::named(name) else {
+            continue;
+        };
+        // A codex handle and its thread are one session: tried, and reported, once.
+        let resolved = agent.resolved(session);
+        if seen.contains(&(name, resolved.clone())) {
+            continue;
+        }
+        seen.push((name, resolved.clone()));
+        let Err(why) = agent.discard(session) else {
+            continue;
+        };
+        if tries + 1 >= RETRIES {
+            abandoned.push(why);
+        } else {
+            kept.push(format!("{name}\t{resolved}\t{}", tries + 1));
+            failed.push(why);
         }
     }
-    let _ = std::fs::remove_dir_all(dir);
+    let written = if kept.is_empty() {
+        std::fs::remove_file(&path).or_else(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => Ok(()),
+            _ => Err(e),
+        })
+    } else {
+        std::fs::write(&path, kept.join("\n") + "\n")
+    };
+    if let Err(e) = written {
+        failed.push(format!("cannot record them in {}: {e}", path.display()));
+    }
+    if !failed.is_empty() {
+        crate::report::undeleted(&failed, "retried when the next commit lands");
+    }
+    if !abandoned.is_empty() {
+        crate::report::undeleted(
+            &abandoned,
+            "no longer retried; git agent-verdict --prune-sessions lists them",
+        );
+    }
+    for diary in diaries {
+        let _ = std::fs::remove_dir_all(diary);
+    }
 }
 
 // Its own call because a landed commit moves HEAD: the diary it wrote is now one this repo has moved past.
@@ -283,7 +338,7 @@ pub fn log_reset(reason: &str) -> Result<u32, String> {
     let mut text = std::fs::read_to_string(&path).unwrap_or_default();
     text.push_str(&format!("{}\t{reason}\n", git::head_sha()));
     std::fs::write(&path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
-    retire(&root.join(git::head_sha()));
+    retire(&[root.join(git::head_sha())]);
     resets()
 }
 

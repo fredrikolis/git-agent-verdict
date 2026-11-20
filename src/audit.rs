@@ -43,7 +43,9 @@ fn sweep(
     crate::signals::quiet();
     let answer = answered?;
     let verdicts = runner::verdicts(&answer, declaration.brief.simple)?;
-    agent.discard(&answer.session);
+    if let Err(why) = agent.discard(&answer.session) {
+        report::undeleted(&[why], "kept for git agent-verdict --prune-sessions");
+    }
     Ok((verdicts, runner::findings(&answer.text)))
 }
 

@@ -4,6 +4,12 @@
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 [Semantic Versioning](https://semver.org/). One line per change; the README carries the reasoning.
 
+## [2.5.1] - 2026-11-19
+
+### Fixed
+- A failed `codex delete` no longer removes the rollout anyway, stranding the thread in codex's index; the failure is reported and retried at the next commit.
+- `--prune-sessions` also finds threads codex still indexes after their rollout is gone, read through `sqlite3`.
+
 ## [2.5.0] - 2026-11-17
 
 ### Added

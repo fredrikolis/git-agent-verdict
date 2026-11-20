@@ -124,24 +124,30 @@ impl Agent {
     }
 
     // Called once nothing will resume it.
-    pub fn discard(self, session: &str) {
+    pub fn discard(self, session: &str) -> Result<(), String> {
         if session.is_empty() || session.starts_with('.') || session.contains('/') {
-            return;
+            return Ok(());
         }
         match self {
-            Agent::Claude => {
-                if let Some(path) = claude_transcript(session) {
-                    forget_claude(&path);
-                }
-            }
+            Agent::Claude => claude_transcript(session).map_or(Ok(()), |path| forget_claude(&path)),
             Agent::Codex => {
-                if let Some(path) = codex_transcript(session) {
-                    forget_codex(&codex_thread(session), &path);
+                // A failed delete keeps the link, so a retry still resolves the handle.
+                if codex_transcript(session).is_some() {
+                    forget_codex(&codex_thread(session))?;
                 }
                 if let Ok(dir) = threads() {
                     let _ = std::fs::remove_file(dir.join(session));
                 }
+                Ok(())
             }
+        }
+    }
+
+    // Codex threads it still indexes after their rollout went: no file scan finds them.
+    pub fn stranded(self, ours: &dyn Fn(&str) -> bool) -> Result<Vec<Leftover>, String> {
+        match self {
+            Agent::Claude => Ok(Vec::new()),
+            Agent::Codex => codex_stranded(ours),
         }
     }
 
@@ -162,6 +168,7 @@ impl Agent {
                 .map(|path| Leftover {
                     agent: self,
                     thread: String::new(),
+                    touched: modified(&path),
                     path,
                 })
                 .collect(),
@@ -170,9 +177,10 @@ impl Agent {
                 .filter_map(|path| {
                     let thread = rollout_thread(path.file_name()?.to_str()?)
                         .filter(|_| path.extension().is_some_and(|ext| ext == "jsonl"))?;
-                    codex_opened(&path, ours).then_some(Leftover {
+                    codex_opened(&path, ours).then(|| Leftover {
                         agent: self,
                         thread,
+                        touched: modified(&path),
                         path,
                     })
                 })
@@ -578,16 +586,87 @@ fn claude_transcript(session: &str) -> Option<std::path::PathBuf> {
 pub struct Leftover {
     pub agent: Agent,
     pub path: std::path::PathBuf,
+    pub touched: Option<std::time::SystemTime>,
     thread: String,
 }
 
 impl Leftover {
-    pub fn forget(&self) {
+    pub fn forget(&self) -> Result<(), String> {
         match self.agent {
             Agent::Claude => forget_claude(&self.path),
-            Agent::Codex => forget_codex(&self.thread, &self.path),
+            Agent::Codex => forget_codex(&self.thread),
         }
     }
+}
+
+fn modified(path: &std::path::Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .ok()
+}
+
+// Codex's index is its own, undocumented; read-only through sqlite3, and only for what a file scan cannot see.
+fn codex_stranded(ours: &dyn Fn(&str) -> bool) -> Result<Vec<Leftover>, String> {
+    let Some(home) = codex_home() else {
+        return Ok(Vec::new());
+    };
+    let indexes: Vec<std::path::PathBuf> = std::fs::read_dir(&home)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("state_") && name.ends_with(".sqlite"))
+        })
+        .collect();
+    let mut found = Vec::new();
+    for index in indexes {
+        let out = Command::new("sqlite3")
+            .args(["-readonly", "-json"])
+            .arg(&index)
+            .arg("select id, rollout_path, updated_at, first_user_message from threads where originator = 'codex_exec'")
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|e| format!("cannot run sqlite3 to read {}: {e}", index.display()))?;
+        if !out.status.success() {
+            return Err(format!(
+                "cannot read {}: {}",
+                index.display(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        let rows: Vec<serde_json::Value> = if text.trim().is_empty() {
+            Vec::new()
+        } else {
+            serde_json::from_str(&text).map_err(|e| format!("{}: {e}", index.display()))?
+        };
+        for row in rows {
+            let (Some(id), Some(rollout), Some(first)) = (
+                row["id"].as_str(),
+                row["rollout_path"].as_str(),
+                row["first_user_message"].as_str(),
+            ) else {
+                continue;
+            };
+            let path = std::path::PathBuf::from(rollout);
+            if path.exists() || !ours(first) {
+                continue;
+            }
+            let touched = row["updated_at"]
+                .as_u64()
+                .map(|at| std::time::UNIX_EPOCH + Duration::from_secs(at));
+            found.push(Leftover {
+                agent: Agent::Codex,
+                path,
+                touched,
+                thread: id.to_string(),
+            });
+        }
+    }
+    Ok(found)
 }
 
 // Transcripts run to tens of megabytes; the prompt opens them.
@@ -634,13 +713,20 @@ fn codex_opened(path: &std::path::Path, ours: &dyn Fn(&str) -> bool) -> bool {
             .any(ours)
 }
 
-fn forget_claude(transcript: &std::path::Path) {
-    let _ = std::fs::remove_file(transcript);
+fn forget_claude(transcript: &std::path::Path) -> Result<(), String> {
+    match std::fs::remove_file(transcript) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(format!("cannot delete {}: {e}", transcript.display()))
+        }
+        _ => {}
+    }
     let Some(id) = transcript.file_stem().and_then(|stem| stem.to_str()) else {
-        return;
+        return Ok(());
     };
     let _ = std::fs::remove_dir_all(transcript.with_extension(""));
-    let Some(home) = claude_home() else { return };
+    let Some(home) = claude_home() else {
+        return Ok(());
+    };
     let _ = std::fs::remove_dir_all(home.join("session-env").join(id));
     let _ = std::fs::remove_dir_all(home.join("file-history").join(id));
     for todo in std::fs::read_dir(home.join("todos"))
@@ -652,32 +738,42 @@ fn forget_claude(transcript: &std::path::Path) {
             let _ = std::fs::remove_file(todo.path());
         }
     }
+    Ok(())
 }
 
-// Codex's delete also updates its thread index; removing the file is the fallback.
 const DELETING: Duration = Duration::from_secs(30);
 
-fn forget_codex(thread: &str, rollout: &std::path::Path) {
-    let spawned = Command::new("codex")
+// Only codex's own delete: removing the rollout behind its back leaves the thread indexed with nothing to find it by.
+fn forget_codex(thread: &str) -> Result<(), String> {
+    let mut child = Command::new("codex")
         .args(["delete", "--force", thread])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
-    if let Ok(mut child) = spawned {
-        let by = Instant::now() + DELETING;
-        while matches!(child.try_wait(), Ok(None)) {
-            if Instant::now() > by {
-                let _ = child.kill();
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(50));
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("cannot run codex delete: {e}"))?;
+    let (drained, err) = drain(child.stderr.take(), None);
+    let by = Instant::now() + DELETING;
+    while matches!(child.try_wait(), Ok(None)) {
+        if Instant::now() > by {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!(
+                "codex delete {thread} did not finish in {}s",
+                DELETING.as_secs()
+            ));
         }
-        let _ = child.wait();
+        std::thread::sleep(Duration::from_millis(50));
     }
-    if rollout.exists() {
-        let _ = std::fs::remove_file(rollout);
+    let status = child
+        .wait()
+        .map_err(|e| format!("codex delete {thread}: {e}"))?;
+    if status.success() {
+        return Ok(());
     }
+    settled(&drained, Instant::now() + SETTLING);
+    let said = clipped(&text_of(&err));
+    Err(format!("codex delete {thread} exited {status}: {said}"))
 }
 
 // Linux's cap on a single argument (MAX_ARG_STRLEN), which the brief rides in as one.
