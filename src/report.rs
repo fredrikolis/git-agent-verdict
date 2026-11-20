@@ -451,22 +451,42 @@ pub fn not_passed(gate: &str) -> String {
     )
 }
 
+pub fn undeleted(failed: &[String], then: &str) {
+    eprintln!(
+        "git-agent-verdict: {} reviewer session(s) could not be deleted; {then}",
+        failed.len()
+    );
+    for why in failed {
+        eprintln!("  {why}");
+    }
+}
+
 // The paths on stdout, one per line, so a preview can be read or piped; what it amounts to on stderr.
-pub fn leftovers(found: &[crate::agent::Leftover], bytes: u64, confirmed: bool, stuck: usize) {
+pub fn leftovers(
+    found: &[crate::agent::Leftover],
+    bytes: u64,
+    confirmed: bool,
+    failed: &[String],
+    unread: &[String],
+) {
     for leftover in found {
         println!("{}\t{}", leftover.agent.name(), leftover.path.display());
+    }
+    for why in unread {
+        eprintln!("git-agent-verdict: codex threads whose rollout is gone are not listed: {why}");
     }
     let size = format!("{:.1} MB", bytes as f64 / 1_000_000.0);
     if confirmed {
         eprintln!(
             "git-agent-verdict: deleted {} reviewer session(s) of {}, {size}",
-            found.len() - stuck,
+            found.len() - failed.len(),
             found.len()
         );
-        if stuck > 0 {
-            eprintln!(
-                "  {stuck} could not be deleted; run it again, or remove the listed paths by hand"
-            );
+        for why in failed {
+            eprintln!("  {why}");
+        }
+        if !failed.is_empty() {
+            eprintln!("  each is kept; run it again once the cause is fixed");
         }
         return;
     }

@@ -137,3 +137,45 @@ fn confirming_deletes_this_tools_sessions_and_nothing_else() {
     assert!(m.theirs.iter().all(|path| path.exists()));
     assert_eq!(m.repo.read("deleted"), format!("{THREAD}\n"));
 }
+
+const STRANDED: &str = "01a184cd-3444-74f3-8bf0-0ede781d3c9c";
+
+// Codex's index as sqlite3 -json prints it: a stranded thread of ours, someone else's, and one whose rollout a file scan already finds.
+fn indexed(m: &Machine) {
+    let codex_home = m.repo.home().join(".codex");
+    std::fs::write(codex_home.join("state_5.sqlite"), "").expect("index");
+    let rows = serde_json::json!([
+        {"id": STRANDED, "rollout_path": codex_home.join("sessions/gone.jsonl"), "updated_at": 1_700_000_000u64, "first_user_message": OURS},
+        {"id": "01a184cd-0000-74f3-8bf0-000000000001", "rollout_path": codex_home.join("sessions/gone-too.jsonl"), "updated_at": 1_700_000_000u64, "first_user_message": "summarize this file"},
+        {"id": THREAD, "rollout_path": &m.ours[1], "updated_at": 1_700_000_000u64, "first_user_message": OURS},
+    ]);
+    let stub = format!("#!/bin/sh\ncat <<'ROWS'\n{rows}\nROWS\n");
+    let path = m.repo.dir.join("bin/sqlite3");
+    std::fs::write(&path, stub).expect("stub");
+    let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
+    std::fs::set_permissions(&path, mode).expect("chmod");
+}
+
+#[test]
+fn a_thread_codex_still_indexes_without_its_rollout_is_found_and_deleted() {
+    let m = machine();
+    indexed(&m);
+    let preview = m.repo.capture(&["--prune-sessions"]);
+    assert_eq!(listed(&preview.out).len(), 3, "{}", preview.out);
+    assert!(preview.out.contains("gone.jsonl"), "{}", preview.out);
+    let run = m.repo.capture(&["--prune-sessions", "--confirm"]);
+    assert_eq!(run.code, 0, "{}", run.err);
+    let deleted = m.repo.read("deleted");
+    assert!(deleted.lines().any(|t| t == STRANDED), "{deleted}");
+    assert_eq!(deleted.lines().count(), 2, "{deleted}");
+}
+
+#[test]
+fn a_delete_codex_refuses_is_reported_and_its_rollout_kept() {
+    let m = machine();
+    m.repo.write("delete-fails", "");
+    let run = m.repo.capture(&["--prune-sessions", "--confirm"]);
+    assert_eq!(run.code, 1, "{}", run.err);
+    assert!(run.err.contains("database is locked"), "{}", run.err);
+    assert!(m.ours[1].exists(), "the rollout went without codex");
+}

@@ -493,3 +493,96 @@ fn an_answered_audit_leaves_no_session() {
     assert_eq!(audit.code, 0, "{}", audit.err);
     assert_eq!(repo.saved_sessions(), Vec::<std::path::PathBuf>::new());
 }
+
+#[test]
+fn a_codex_thread_that_would_not_delete_is_kept_and_retried_at_the_next_commit() {
+    let repo = Repo::new();
+    repo.declare_codex(&format!("echo '{CLEAN}'"), &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    assert_eq!(repo.attest(AIM).code, 0);
+    let first = repo
+        .read("threads")
+        .lines()
+        .last()
+        .expect("a thread")
+        .to_string();
+    repo.write("delete-fails", "");
+    let landed = repo.commit();
+    assert_eq!(landed.code, 0, "{}", landed.err);
+    assert!(landed.err.contains("database is locked"), "{}", landed.err);
+    assert_eq!(
+        repo.saved_sessions().len(),
+        1,
+        "the rollout went without codex"
+    );
+
+    std::fs::remove_file(repo.dir.join("delete-fails")).expect("unblock");
+    repo.write("src.rs", "changed again");
+    repo.stage(&["src.rs"]);
+    assert_eq!(repo.attest(AIM).code, 0);
+    assert_eq!(repo.commit().code, 0);
+    assert!(
+        repo.read("deleted").lines().any(|t| t == first),
+        "{}",
+        repo.read("deleted")
+    );
+    assert_eq!(repo.saved_sessions(), Vec::<std::path::PathBuf>::new());
+}
+
+#[test]
+fn a_codex_thread_codex_keeps_refusing_is_reported_once_per_try_then_left_to_prune() {
+    let repo = Repo::new();
+    repo.declare_codex(&format!("echo '{CLEAN}'"), &[STANDARDS]);
+    repo.write("delete-fails", "");
+    repo.stage(&["src.rs"]);
+    assert_eq!(repo.attest(AIM).code, 0);
+    let first = repo
+        .read("threads")
+        .lines()
+        .last()
+        .expect("a thread")
+        .to_string();
+    let landed = repo.commit();
+    assert!(
+        landed
+            .err
+            .contains("1 reviewer session(s) could not be deleted"),
+        "{}",
+        landed.err
+    );
+    let root = repo.root();
+    let mut said = String::new();
+    for round in 0..2 {
+        repo.write("src.rs", &format!("change {round}"));
+        repo.stage(&["src.rs"]);
+        assert_eq!(repo.attest(AIM).code, 0);
+        said = repo
+            .capture(&["reset", "--repo", &root, "the change changed shape"])
+            .err;
+    }
+    assert!(said.contains("no longer retried"), "{said}");
+    assert!(said.contains(&first), "{said}");
+    let undeleted = repo.dir.join(".git/agent-verdict/undeleted");
+    let left = std::fs::read_to_string(undeleted).unwrap_or_default();
+    assert!(!left.contains(&first), "{left}");
+}
+
+// A cut-short round keeps its link, so the ledger names one thread twice: by handle and by thread.
+#[test]
+fn a_thread_named_by_handle_and_by_thread_is_tried_once() {
+    let repo = Repo::new();
+    repo.declare_codex("sleep 60", &[STANDARDS]);
+    repo.stage(&["src.rs"]);
+    assert_eq!(repo.attest_within(AIM, "2s").code, 2);
+    assert_eq!(repo.codex_links().len(), 1);
+    repo.write("delete-fails", "");
+    let root = repo.root();
+    let reset = repo.capture(&["reset", "--repo", &root, "the change changed shape"]);
+    assert!(
+        reset
+            .err
+            .contains("1 reviewer session(s) could not be deleted"),
+        "{}",
+        reset.err
+    );
+}

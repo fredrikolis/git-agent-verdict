@@ -376,6 +376,7 @@ fi
         let stub = format!(
             r#"#!/bin/sh
 if [ "$1" = delete ]; then
+  [ -f delete-fails ] && {{ echo "Error: database is locked" >&2; exit 1; }}
   echo "$3" >> deleted
   rm -f "$HOME"/.codex/sessions/*/*/*/rollout-*-"$3".jsonl
   exit 0
